@@ -1,0 +1,154 @@
+//! Builder that configures common proxy knobs and starts a registry router
+//! in-process against a mock upstream.
+
+#[cfg(test)]
+mod tests;
+
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::Router;
+use chilled_core::config::RegistrySettings;
+use tempfile::TempDir;
+use url::Url;
+use wiremock::MockServer;
+
+use crate::server::TestServer;
+
+/// Everything a registry crate needs to construct its config for a test run.
+pub struct TestContext {
+    /// The mock upstream's base URL (or a refused port when `dead_upstream`).
+    pub upstream: Url,
+    /// Root of the temp cache directory.
+    pub cache_dir: PathBuf,
+    /// Resolved common settings (cooldown, TTL, overrides, proxy URL, ...).
+    pub settings: RegistrySettings,
+}
+
+/// Configures and starts a [`TestServer`].
+pub struct TestServerBuilder {
+    cooldown: Duration,
+    cache_ttl: Duration,
+    overrides: HashSet<String>,
+    restrict_downloads: bool,
+    proxy_url: Option<String>,
+    dead_upstream: bool,
+    prefix: String,
+}
+
+impl TestServerBuilder {
+    /// A builder for a registry mounted at `prefix` (e.g. `/crates`). An empty
+    /// prefix serves the router unwrapped (for full-app tests).
+    pub fn new(prefix: &str) -> Self {
+        TestServerBuilder {
+            cooldown: Duration::ZERO,
+            cache_ttl: Duration::from_secs(3600),
+            overrides: HashSet::new(),
+            restrict_downloads: false,
+            proxy_url: None,
+            dead_upstream: false,
+            prefix: prefix.to_string(),
+        }
+    }
+
+    pub fn cooldown(mut self, d: Duration) -> Self {
+        self.cooldown = d;
+        self
+    }
+
+    pub fn cooldown_days(self, days: u64) -> Self {
+        self.cooldown(Duration::from_secs(days * 86_400))
+    }
+
+    pub fn cache_ttl(mut self, d: Duration) -> Self {
+        self.cache_ttl = d;
+        self
+    }
+
+    /// Adds a package to the cooldown-override set (stored lower-cased,
+    /// matching the app's normalized lookup).
+    pub fn override_package(mut self, name: &str) -> Self {
+        self.overrides.insert(name.to_ascii_lowercase());
+        self
+    }
+
+    pub fn restrict_downloads(mut self) -> Self {
+        self.restrict_downloads = true;
+        self
+    }
+
+    pub fn proxy_url(mut self, url: &str) -> Self {
+        self.proxy_url = Some(url.to_string());
+        self
+    }
+
+    /// Points the upstream at a refused port so fetches fail at the transport
+    /// layer (for stale-cache / 502 tests).
+    pub fn dead_upstream(mut self) -> Self {
+        self.dead_upstream = true;
+        self
+    }
+
+    /// Starts the mock upstream and the proxy, building the registry router
+    /// with `make_router`. Returns a driving handle.
+    pub async fn start(self, make_router: impl FnOnce(&TestContext) -> Router) -> TestServer {
+        let mock_upstream = MockServer::start().await;
+
+        let upstream = if self.dead_upstream {
+            // Reserved-but-refused: nothing listens on TCP port 1.
+            "http://127.0.0.1:1/".to_string()
+        } else {
+            format!("{}/", mock_upstream.uri().trim_end_matches('/'))
+        };
+
+        let tmp = TempDir::new().expect("create temp cache dir");
+        let cache_dir = tmp.path().to_path_buf();
+
+        let proxy_url = self
+            .proxy_url
+            .unwrap_or_else(|| format!("http://localhost:3080{}/", self.prefix));
+
+        let ctx = TestContext {
+            upstream: Url::parse(&upstream).unwrap(),
+            cache_dir: cache_dir.clone(),
+            settings: RegistrySettings {
+                cache_dir: cache_dir.clone(),
+                cache_ttl: self.cache_ttl,
+                cooldown: self.cooldown,
+                overrides: Arc::new(self.overrides),
+                restrict_downloads: self.restrict_downloads,
+                proxy_url: Url::parse(&proxy_url).unwrap(),
+            },
+        };
+
+        let inner = make_router(&ctx);
+        let app = if self.prefix.is_empty() {
+            inner
+        } else {
+            Router::new().nest(&self.prefix, inner)
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(chilled_core::serve::serve_listener(listener, app));
+
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("build test client");
+        let base_url = format!("http://{addr}");
+
+        // Wait until the server answers anything at all (status is irrelevant).
+        for _ in 0..100 {
+            if client.get(format!("{base_url}/")).send().await.is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        TestServer::new(mock_upstream, base_url, self.prefix, cache_dir, client, tmp)
+    }
+}

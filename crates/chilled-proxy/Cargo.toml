@@ -1,0 +1,45 @@
+[package]
+name = "chilled-proxy"
+description = "Multi-registry caching proxy (crates.io, npm, PyPI, Maven) with cooldown age-gating"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["registry", "proxy", "cache", "cooldown", "supply-chain"]
+categories = ["development-tools", "caching", "web-programming::http-server"]
+readme = "../../README.md"
+
+[lib]
+name = "chilled_proxy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chilled-proxy"
+path = "src/main.rs"
+
+[features]
+# Use the OS-native trusted root certificate store instead of the bundled roots.
+native-certs = ["reqwest/rustls-tls-native-roots"]
+
+[dependencies]
+chilled-core = { path = "../chilled-core" }
+crates-proxy = { path = "../crates-proxy" }
+npm-proxy = { path = "../npm-proxy" }
+pypi-proxy = { path = "../pypi-proxy" }
+maven-proxy = { path = "../maven-proxy" }
+url.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+chilled-testkit = { path = "../chilled-testkit" }
+reqwest = { workspace = true, features = ["json"] }
+wiremock.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "pypi-proxy"
+description = "Caching PyPI simple-index proxy with upload-time age-gating"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "pypi_proxy"
+path = "src/lib.rs"
+
+[dependencies]
+chilled-core = { path = "../chilled-core" }
+url.workspace = true
+log.workspace = true
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+chilled-testkit = { path = "../chilled-testkit" }
+reqwest = { workspace = true, features = ["json"] }
+wiremock.workspace = true
+tempfile.workspace = true

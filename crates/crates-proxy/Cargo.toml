@@ -1,0 +1,31 @@
+[package]
+name = "crates-proxy"
+description = "Caching crates.io proxy with sparse-index age-gating"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords = ["crates", "cargo", "registry", "proxy", "cache"]
+categories = ["development-tools", "caching", "web-programming::http-server"]
+
+[lib]
+name = "crates_proxy"
+path = "src/lib.rs"
+
+[dependencies]
+chilled-core = { path = "../chilled-core" }
+url.workspace = true
+log.workspace = true
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+chilled-testkit = { path = "../chilled-testkit" }
+reqwest = { workspace = true, features = ["json"] }
+wiremock.workspace = true
+tempfile.workspace = true
+serde_json.workspace = true

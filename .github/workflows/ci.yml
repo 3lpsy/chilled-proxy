@@ -1,0 +1,55 @@
+name: CI
+
+# Format, lint, and test the whole workspace on pushes and pull requests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Deny all permissions by default; jobs opt into the minimum they need.
+permissions: {}
+
+# A newer run for the same ref supersedes an in-progress one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the repo
+
+    steps:
+      # Actions are pinned to commit SHAs (not mutable tags) to prevent a
+      # compromised upstream tag from injecting code. Keep current via Dependabot.
+      - name: Check out the repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Update the stable Rust toolchain
+        run: rustup update stable && rustup default stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # `--locked` keeps CI on the committed Cargo.lock: without it cargo may
+      # silently resolve newer dependencies, so CI would test a tree nobody has.
+      - name: Lint (clippy, warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --locked

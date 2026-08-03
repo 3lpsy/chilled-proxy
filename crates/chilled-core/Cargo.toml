@@ -1,0 +1,25 @@
+[package]
+name = "chilled-core"
+description = "Registry-agnostic machinery shared by the chilled-proxy registry proxies"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "chilled_core"
+path = "src/lib.rs"
+
+[dependencies]
+url.workspace = true
+log.workspace = true
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+bytes.workspace = true
+percent-encoding.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

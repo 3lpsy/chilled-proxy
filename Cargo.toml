@@ -1,0 +1,40 @@
+# chilled-proxy builds on two upstream projects, under their MIT OR Apache-2.0 terms:
+#   * crates-io-proxy by Sergey Kvachonok (ravenexp) — the caching proxy core.
+#     https://github.com/ravenexp/crates-io-proxy
+#   * menhera.org's crates.io cooldown proxy (metastable-void) — the sparse-index
+#     age-gating logic. Credit and thanks to both.
+
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["3lpsy"]
+edition = "2021"
+homepage = "https://github.com/3lpsy/chilled-proxy"
+repository = "https://github.com/3lpsy/chilled-proxy"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+url = "2.5"
+clap = { version = "4", features = ["derive", "env"] }
+log = "0.4"
+env_logger = { version = "0.11", default-features = false }
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = "0.37"
+sha1 = "0.10"
+sha2 = "0.10"
+md-5 = "0.10"
+percent-encoding = "2"
+wiremock = "0.6"
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = "debuginfo"

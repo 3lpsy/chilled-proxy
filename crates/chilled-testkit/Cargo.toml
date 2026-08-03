@@ -1,0 +1,23 @@
+[package]
+name = "chilled-testkit"
+description = "Shared blackbox-test harness for the chilled-proxy registry proxies"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "chilled_testkit"
+path = "src/lib.rs"
+
+[dependencies]
+chilled-core = { path = "../chilled-core" }
+axum.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+wiremock.workspace = true
+tempfile.workspace = true
