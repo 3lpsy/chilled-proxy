@@ -129,12 +129,13 @@ async fn download_transport_failure_is_502() {
 
 #[tokio::test]
 async fn oversized_crate_is_507() {
-    // MAX_CRATE_SIZE is 16 MiB; one byte over the cap must be refused, not
-    // truncated. (Abuse: an upstream/forged response trying to exhaust memory.)
-    const MAX_CRATE_SIZE: usize = 0x100_0000;
-    let proxy = TestProxy::builder().start().await;
+    // One byte over the cap must be refused, not truncated. (Abuse: an
+    // upstream/forged response trying to exhaust memory.) The cap is set
+    // explicitly so the test states what it exercises rather than inheriting it.
+    const CAP: usize = 0x1000;
+    let proxy = TestProxy::builder().max_artifact_size(CAP).start().await;
     proxy
-        .mock_crate("serde", "1.0.0", &vec![0u8; MAX_CRATE_SIZE + 1])
+        .mock_crate("serde", "1.0.0", &vec![0u8; CAP + 1])
         .await;
 
     assert_eq!(proxy.download("serde", "1.0.0").await.status(), 507);
@@ -180,4 +181,34 @@ async fn restrict_gate_fetches_the_index_on_demand() {
     // Still fail-closed for a version inside the window.
     proxy.mock_crate("serde", "2.0.0", CRATE_BYTES).await;
     assert_eq!(proxy.download("serde", "2.0.0").await.status(), 403);
+}
+
+#[tokio::test]
+async fn a_raised_cap_admits_a_body_the_default_would_refuse() {
+    // The knob has to actually move the limit, not just exist: an artifact over
+    // the configured cap is 507, and the same artifact under a raised cap is
+    // served whole. (This is the ML-wheel case: a 349 MiB wheel against the
+    // 256 MiB PyPI default.)
+    const SMALL: usize = 0x1000;
+    let body = vec![7u8; SMALL + 1];
+
+    let tight = TestProxy::builder().max_artifact_size(SMALL).start().await;
+    tight.mock_crate("serde", "1.0.0", &body).await;
+    assert_eq!(tight.download("serde", "1.0.0").await.status(), 507);
+
+    let roomy = TestProxy::builder()
+        .max_artifact_size(SMALL * 4)
+        .start()
+        .await;
+    roomy.mock_crate("serde", "1.0.0", &body).await;
+    let resp = roomy.download("serde", "1.0.0").await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().len(), body.len());
+    // And it was cached whole, not truncated at the old limit.
+    assert_eq!(
+        std::fs::metadata(roomy.crate_cache_path("serde", "1.0.0"))
+            .unwrap()
+            .len() as usize,
+        body.len()
+    );
 }

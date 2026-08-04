@@ -100,3 +100,26 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
+
+/// Builds a PEP 503 HTML project page from `(filename, upload_time, sha256)`
+/// triples, in the shape an HTML-only index (PyTorch, devpi) serves. An empty
+/// `upload_time` omits the `data-upload-time` attribute entirely.
+pub fn simple_html(project: &str, files: &[(&str, &str, &str)]) -> String {
+    let mut out = format!(
+        "<!DOCTYPE html><html><head><title>Links for {project}</title></head>\
+         <body><h1>Links for {project}</h1>\n"
+    );
+    for (filename, upload_time, sha256) in files {
+        let time = if upload_time.is_empty() {
+            String::new()
+        } else {
+            format!(" data-upload-time=\"{upload_time}\"")
+        };
+        out.push_str(&format!(
+            "<a href=\"https://files.pythonhosted.org/packages/aa/bb/cc/{filename}#sha256={sha256}\"\
+             {time} data-requires-python=\"&gt;=3.8\">{filename}</a><br/>\n"
+        ));
+    }
+    out.push_str("</body></html>");
+    out
+}

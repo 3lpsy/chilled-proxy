@@ -17,6 +17,15 @@ const MAX_NAME_LEN: usize = 128;
 /// Maximum accepted distribution filename length.
 const MAX_FILENAME_LEN: usize = 256;
 
+/// Maximum accepted directory segments before the filename on the files route.
+///
+/// PyPI's own layout spends four (`packages/<a>/<b>/<hash>`), but a mount may
+/// front an index with a different one — PyTorch serves `whl/cpu/<file>` — so
+/// the shape is bounded rather than pinned. The host is never taken from the
+/// path (it comes from the pinned files URL), so depth is a traversal and
+/// cache-layout question, not an SSRF one.
+const MAX_PATH_SEGMENTS: usize = 8;
+
 /// Returns `true` for a syntactically valid raw project name: ASCII
 /// alphanumerics plus `.`, `_`, `-`, starting and ending alphanumeric
 /// (which kills `..`, `.hidden`, and trailing dots).
@@ -72,25 +81,28 @@ pub(crate) fn distribution_name(name: &str) -> &str {
     name.strip_suffix(METADATA_SUFFIX).unwrap_or(name)
 }
 
-/// Validates a files-route tail: `packages/<seg>/<seg>/<seg>/<filename>`.
-/// Returns the filename on success.
+/// Validates a files-route tail: one or more clean directory segments followed
+/// by a distribution filename. Returns the filename on success.
+///
+/// Every segment is charset- and traversal-checked, so the tail can only ever
+/// name a path *below* the pinned files URL.
 pub(crate) fn validate_fhp_path(path: &str) -> Option<&str> {
-    let mut parts = path.split('/');
-    if parts.next()? != "packages" {
+    let mut parts: Vec<&str> = path.split('/').collect();
+    let filename = parts.pop()?;
+    if parts.is_empty() || parts.len() > MAX_PATH_SEGMENTS {
         return None;
     }
-    for _ in 0..3 {
-        let seg = parts.next()?;
-        let charset_ok = seg
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-        if !is_clean_segment(seg) || !charset_ok {
-            return None;
-        }
-    }
-    let filename = parts.next()?;
-    if parts.next().is_some() || !is_valid_filename(filename) {
+    if !parts.iter().all(|seg| is_path_segment(seg)) || !is_valid_filename(filename) {
         return None;
     }
     Some(filename)
+}
+
+/// A directory segment on the files route: clean (no `.`/`..`/empty) and
+/// restricted to the charset upstream layouts actually use.
+fn is_path_segment(seg: &str) -> bool {
+    is_clean_segment(seg)
+        && seg
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'+'))
 }

@@ -73,7 +73,10 @@ async fn html_only_upstream_fails_closed_under_cooldown() {
 }
 
 #[tokio::test]
-async fn html_only_upstream_passes_through_without_cooldown() {
+async fn html_only_upstream_is_normalized_not_passed_through() {
+    // An HTML index is parsed into the PEP 691 model, so the client gets the
+    // representation it asked for instead of whatever dialect upstream spoke.
+    // A page with no links normalizes to an index with no files.
     let proxy = TestProxy::builder().start().await;
     proxy
         .mock_simple_ctype("foo", "<html>mirror</html>", "\"e1\"", "text/html")
@@ -84,6 +87,20 @@ async fn html_only_upstream_passes_through_without_cooldown() {
     assert!(resp.headers()["content-type"]
         .to_str()
         .unwrap()
-        .starts_with("text/html"));
-    assert_eq!(resp.text().await.unwrap(), "<html>mirror</html>");
+        .starts_with("application/vnd.pypi.simple.v1+json"));
+    let doc: serde_json::Value = resp.json().await.unwrap();
+    assert!(doc["files"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_unrecognized_body_still_passes_through_without_cooldown() {
+    // Passthrough now covers only bodies that are neither JSON nor HTML.
+    let proxy = TestProxy::builder().start().await;
+    proxy
+        .mock_simple_ctype("foo", "raw bytes", "\"e1\"", "application/octet-stream")
+        .await;
+
+    let resp = proxy.get_simple("foo", JSON_ACCEPT).await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.text().await.unwrap(), "raw bytes");
 }

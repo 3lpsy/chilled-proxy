@@ -8,12 +8,17 @@
 pub(crate) mod accept;
 pub(crate) mod constants;
 pub(crate) mod filter;
+pub(crate) mod html;
 pub(crate) mod model;
 pub(crate) mod render;
 pub(crate) mod routes;
 pub(crate) mod state;
 pub(crate) mod stats;
 pub(crate) mod valid;
+
+/// Built-in upstream size caps for this registry; the CLI uses them as the
+/// defaults behind `--max-metadata-size` / `--max-artifact-size`.
+pub use constants::{DEFAULT_MAX_ARTIFACT_SIZE, DEFAULT_MAX_METADATA_SIZE};
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -1,0 +1,139 @@
+//! Crate name/version model: download URLs and cache file paths.
+
+use std::fmt::{Display, Formatter, Result};
+use std::path::PathBuf;
+
+/// Crate download API endpoint suffix
+const DOWNLOAD_API_ENDPOINT: &str = "/download";
+
+/// Rust crate information structure
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CrateInfo {
+    name: String,
+    version: String,
+}
+
+impl Display for CrateInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "{} v{}", self.name, self.version)
+    }
+}
+
+impl CrateInfo {
+    /// Creates a new crate information object.
+    #[must_use]
+    pub(crate) fn new(name: &str, version: &str) -> Self {
+        CrateInfo {
+            name: name.to_owned(),
+            version: version.to_owned(),
+        }
+    }
+
+    /// Gets the crate name.
+    #[must_use]
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Gets the crate version.
+    #[must_use]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// Extracts crate information from the download API URL path.
+    ///
+    /// Rejects names/versions outside the crates.io character set, which would
+    /// otherwise enable SSRF (e.g. a `http:` scheme segment) or path traversal.
+    #[must_use]
+    pub(crate) fn try_from_download_url(url: &str) -> Option<Self> {
+        let name_version = url.strip_suffix(DOWNLOAD_API_ENDPOINT)?;
+
+        let mut i = name_version.split('/');
+        match (i.next(), i.next(), i.next()) {
+            (Some(name), Some(version), None)
+                if crate::valid::is_crate_name(name) && crate::valid::is_crate_version(version) =>
+            {
+                Some(CrateInfo::new(name, version))
+            }
+            _ => None,
+        }
+    }
+
+    /// Builds the crate download URL (relative).
+    #[must_use]
+    pub(crate) fn to_download_url(&self) -> String {
+        format!(
+            "{name}/{version}{DOWNLOAD_API_ENDPOINT}",
+            name = self.name,
+            version = self.version
+        )
+    }
+
+    /// Builds the crate file name for cache storage.
+    #[must_use]
+    pub(crate) fn to_file_name(&self) -> String {
+        format!("{}-{}.crate", self.name, self.version)
+    }
+
+    /// Builds the relative crate file path for cache storage.
+    #[must_use]
+    pub(crate) fn to_file_path(&self) -> PathBuf {
+        PathBuf::from(self.name()).join(self.to_file_name())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_download_url_accepts_valid() {
+        assert_eq!(
+            CrateInfo::try_from_download_url("serde/1.0.0/download"),
+            Some(CrateInfo::new("serde", "1.0.0"))
+        );
+        assert_eq!(
+            CrateInfo::try_from_download_url("x11-dl/2.21.0-alpha.1+build.2/download"),
+            Some(CrateInfo::new("x11-dl", "2.21.0-alpha.1+build.2"))
+        );
+    }
+
+    #[test]
+    fn from_download_url_rejects_malformed() {
+        // Missing the `/download` suffix.
+        assert_eq!(CrateInfo::try_from_download_url("serde/1.0.0"), None);
+        // Wrong segment count.
+        assert_eq!(CrateInfo::try_from_download_url("serde/download"), None);
+        assert_eq!(CrateInfo::try_from_download_url("a/b/c/download"), None);
+    }
+
+    #[test]
+    fn from_download_url_rejects_injection_vectors() {
+        // SSRF scheme / host and path-traversal segments must not survive.
+        assert_eq!(
+            CrateInfo::try_from_download_url("http:/1.0.0/download"),
+            None
+        );
+        assert_eq!(
+            CrateInfo::try_from_download_url("serde/127.0.0.1:9/download"),
+            None
+        );
+        assert_eq!(CrateInfo::try_from_download_url("../etc/download"), None);
+        assert_eq!(
+            CrateInfo::try_from_download_url("serde/../../x/download"),
+            None
+        );
+    }
+
+    #[test]
+    fn url_and_path_builders() {
+        let info = CrateInfo::new("serde", "1.0.0");
+        assert_eq!(info.to_download_url(), "serde/1.0.0/download");
+        assert_eq!(info.to_file_name(), "serde-1.0.0.crate");
+        assert_eq!(
+            info.to_file_path(),
+            PathBuf::from("serde").join("serde-1.0.0.crate")
+        );
+    }
+}

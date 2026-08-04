@@ -17,6 +17,7 @@ mod tests;
 
 use std::time::Duration;
 
+use chilled_core::config;
 use chilled_core::cooldown;
 use url::Url;
 
@@ -41,6 +42,10 @@ pub(crate) struct MountSpec {
     pub(crate) cache_ttl: Option<u64>,
     /// Whether to refuse downloads inside the cooldown window.
     pub(crate) restrict_downloads: Option<bool>,
+    /// Cap on an upstream metadata document.
+    pub(crate) max_metadata_size: Option<usize>,
+    /// Cap on an upstream artifact download.
+    pub(crate) max_artifact_size: Option<usize>,
 }
 
 /// The registry-specific second URL key, for registries that have one.
@@ -62,6 +67,8 @@ fn accepted_keys(kind: &str) -> String {
         "cooldown",
         "cache-ttl",
         "restrict-downloads",
+        "max-metadata-size",
+        "max-artifact-size",
     ];
     if let Some(key) = secondary_key(kind) {
         keys.insert(3, key);
@@ -82,6 +89,8 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
         cooldown: None,
         cache_ttl: None,
         restrict_downloads: None,
+        max_metadata_size: None,
+        max_artifact_size: None,
     };
     let mut seen_name = false;
 
@@ -150,6 +159,18 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
                     return Err(twice());
                 }
                 spec.restrict_downloads = Some(parse_bool(&key, value).map_err(err)?);
+            }
+            "max-metadata-size" | "max_metadata_size" => {
+                if spec.max_metadata_size.is_some() {
+                    return Err(twice());
+                }
+                spec.max_metadata_size = Some(config::parse_size(value).map_err(err)?);
+            }
+            "max-artifact-size" | "max_artifact_size" => {
+                if spec.max_artifact_size.is_some() {
+                    return Err(twice());
+                }
+                spec.max_artifact_size = Some(config::parse_size(value).map_err(err)?);
             }
             other if secondary_key(kind) == Some(other) => {
                 if spec.secondary.is_some() {

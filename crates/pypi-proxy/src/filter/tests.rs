@@ -220,11 +220,19 @@ fn rewrite_handles_relative_and_rooted_urls() {
 }
 
 #[test]
-fn doc_without_versions_key_filters_files_only() {
+fn doc_without_versions_key_gets_one_derived() {
+    // `versions` is optional in PEP 691 1.0 and absent from a PEP 503 page, so
+    // it is derived from the surviving files rather than left off.
     let mut d = json!({"files": [file("foo-1.0.0.tar.gz", NEW)]});
     filter_simple_json(&mut d, Some(cutoff()), "foo", &proxy_url());
     assert!(d["files"].as_array().unwrap().is_empty());
-    assert!(d.get("versions").is_none());
+    assert_eq!(d["versions"], json!([]));
+
+    let mut d = json!({
+        "files": [file("foo-1.0.0.tar.gz", OLD), file("foo-2.0.0.tar.gz", NEW)]
+    });
+    filter_simple_json(&mut d, Some(cutoff()), "foo", &proxy_url());
+    assert_eq!(d["versions"], json!(["1.0.0"]));
 }
 
 #[test]

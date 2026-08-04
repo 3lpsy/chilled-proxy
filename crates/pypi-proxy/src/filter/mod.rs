@@ -94,11 +94,19 @@ pub(crate) fn filter_simple_json(
 
         // Drop only versions we actually filtered every file out of.
         let survivors = file_versions(doc, project);
-        if let Some(versions) = doc.get_mut("versions").and_then(Value::as_array_mut) {
-            versions.retain(|v| {
+        match doc.get_mut("versions").and_then(Value::as_array_mut) {
+            Some(versions) => versions.retain(|v| {
                 v.as_str()
                     .is_some_and(|s| survivors.contains(s) || !backed.contains(s))
-            });
+            }),
+            // `versions` is optional in PEP 691 1.0, and absent entirely from a
+            // PEP 503 page. Derive it so every served document describes its own
+            // surviving files, whatever dialect upstream spoke.
+            None => {
+                let mut derived: Vec<String> = survivors.into_iter().collect();
+                derived.sort();
+                doc["versions"] = Value::Array(derived.into_iter().map(Value::String).collect());
+            }
         }
     }
 

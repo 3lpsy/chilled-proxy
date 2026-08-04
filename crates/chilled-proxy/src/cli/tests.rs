@@ -1,5 +1,10 @@
-use super::*;
+use std::path::Path;
+use std::time::Duration;
+
 use clap::Parser;
+use url::Url;
+
+use super::*;
 
 fn parse(args: &[&str]) -> Cli {
     let mut argv = vec!["chilled-proxy"];
@@ -706,4 +711,102 @@ fn mounts_colliding_on_an_env_token_are_rejected() {
     let cli = parse(&["--maven-mount", "name=a-b", "--npm-mount", "name=a.b"]);
     let err = cli.check_mounts().unwrap_err();
     assert!(err.contains("both read CHILLED_A_B_"), "unexpected: {err}");
+}
+
+#[test]
+fn size_caps_default_to_each_registry_own_limit() {
+    // Unlike cooldown, these have no single general default: a 16 MiB crate and
+    // a 512 MiB jar are both normal, so an unset flag must leave each registry
+    // on its own constant rather than collapsing them onto one number.
+    let cli = parse(&[]);
+    let expected = [
+        (
+            "crates",
+            crates_proxy::DEFAULT_MAX_METADATA_SIZE,
+            crates_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        ),
+        (
+            "npm",
+            npm_proxy::DEFAULT_MAX_METADATA_SIZE,
+            npm_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        ),
+        (
+            "pypi",
+            pypi_proxy::DEFAULT_MAX_METADATA_SIZE,
+            pypi_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        ),
+        (
+            "maven",
+            maven_proxy::DEFAULT_MAX_METADATA_SIZE,
+            maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        ),
+    ];
+    for (id, meta, artifact) in expected {
+        let s = cli.registry_settings(id);
+        assert_eq!(s.max_metadata_size, meta, "{id} metadata");
+        assert_eq!(s.max_artifact_size, artifact, "{id} artifact");
+    }
+    // The defaults are genuinely different, or this test proves nothing.
+    assert_ne!(
+        crates_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE
+    );
+}
+
+#[test]
+fn general_size_cap_overrides_every_registry_default() {
+    let cli = parse(&["--max-artifact-size", "1g", "--max-metadata-size", "2m"]);
+    for id in ["crates", "npm", "pypi", "maven"] {
+        let s = cli.registry_settings(id);
+        assert_eq!(s.max_artifact_size, 1024 * 1024 * 1024, "{id}");
+        assert_eq!(s.max_metadata_size, 2 * 1024 * 1024, "{id}");
+    }
+}
+
+#[test]
+fn per_registry_size_cap_beats_the_general_one() {
+    let cli = parse(&[
+        "--max-artifact-size",
+        "1g",
+        "--max-artifact-size-pypi",
+        "2g",
+    ]);
+    assert_eq!(
+        cli.registry_settings("pypi").max_artifact_size,
+        2 * 1024 * 1024 * 1024
+    );
+    // Everyone else still takes the general value.
+    assert_eq!(
+        cli.registry_settings("maven").max_artifact_size,
+        1024 * 1024 * 1024
+    );
+}
+
+#[test]
+fn a_mount_size_cap_beats_the_registry_and_general_ones() {
+    // The pytorch case: one mount carrying large ML wheels, without raising the
+    // ceiling for every other PyPI mount in the process.
+    let cli = parse(&[
+        "--max-artifact-size",
+        "300m",
+        "--max-artifact-size-pypi",
+        "400m",
+        "--pypi-mount",
+        "name=pytorch,upstream=https://download.pytorch.org/whl/cpu/,max-artifact-size=2g",
+    ]);
+    let instances = cli.instances().expect("instances resolve");
+    let pytorch = instances
+        .iter()
+        .find(|i| i.name == "pytorch")
+        .expect("pytorch mount served");
+    assert_eq!(pytorch.settings.max_artifact_size, 2 * 1024 * 1024 * 1024);
+    // The registry's own default mount keeps the per-registry value.
+    let default = instances
+        .iter()
+        .find(|i| i.name == "pypi")
+        .expect("default pypi mount served");
+    assert_eq!(default.settings.max_artifact_size, 400 * 1024 * 1024);
+    // And an unrelated registry keeps the general value.
+    let npm = instances.iter().find(|i| i.name == "npm").unwrap();
+    assert_eq!(npm.settings.max_artifact_size, 300 * 1024 * 1024);
 }

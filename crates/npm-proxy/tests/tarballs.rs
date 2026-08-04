@@ -125,11 +125,16 @@ async fn restrict_is_noop_when_cooldown_disabled() {
 async fn oversized_tarball_is_507() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // A raw upstream declaring a Content-Length one byte over the 256 MiB cap
+    // A raw upstream declaring a Content-Length one byte over the default cap
     // (hyper-based mocks normalize the header away, so speak plain TCP). The
     // up-front cap check must refuse with 507 before reading any body.
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
+    // One byte over whatever this registry's default artifact cap is.
+    let over_cap_head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n",
+        npm_proxy::DEFAULT_MAX_ARTIFACT_SIZE + 1
+    );
     tokio::spawn(async move {
         let mut open = Vec::new();
         loop {
@@ -138,9 +143,7 @@ async fn oversized_tarball_is_507() {
             };
             let mut buf = [0u8; 4096];
             let _ = sock.read(&mut buf).await;
-            let _ = sock
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 268435457\r\n\r\n")
-                .await;
+            let _ = sock.write_all(over_cap_head.as_bytes()).await;
             open.push(sock); // keep the connection open; the body never comes
         }
     });
@@ -152,6 +155,8 @@ async fn oversized_tarball_is_507() {
         cooldown: std::time::Duration::ZERO,
         overrides: std::sync::Arc::new(std::collections::HashSet::new()),
         restrict_downloads: false,
+        max_metadata_size: npm_proxy::DEFAULT_MAX_METADATA_SIZE,
+        max_artifact_size: npm_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         proxy_url: url::Url::parse("http://localhost:3080/npm/").unwrap(),
     };
     let config = npm_proxy::Config::new(

@@ -58,6 +58,16 @@ impl TestProxyBuilder {
         self
     }
 
+    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
+        self.inner = self.inner.max_metadata_size(bytes);
+        self
+    }
+
+    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
+        self.inner = self.inner.max_artifact_size(bytes);
+        self
+    }
+
     pub async fn start(self) -> TestProxy {
         let server = self
             .inner

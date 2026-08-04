@@ -30,6 +30,15 @@ pub struct RegistrySettings {
     pub restrict_downloads: bool,
     /// External URL of this registry's mount on the proxy (with trailing slash).
     pub proxy_url: Url,
+    /// Cap on a metadata document fetched from upstream (index/packument/simple
+    /// JSON/maven-metadata.xml). Over it, the fetch fails with 507.
+    pub max_metadata_size: usize,
+    /// Cap on an artifact fetched from upstream (crate/tarball/wheel/jar).
+    ///
+    /// Bodies are read into memory before being cached and served, so this is
+    /// also the per-request memory ceiling — raising it far past the default
+    /// trades a clean 507 for memory pressure under concurrency.
+    pub max_artifact_size: usize,
 }
 
 impl RegistrySettings {
@@ -73,6 +82,51 @@ pub fn normalize_log_level(level: Option<String>) -> String {
         }
         _ => "info".to_string(),
     }
+}
+
+/// Parses a byte size: a plain byte count, or a number with a unit suffix
+/// (`k`, `m`, `g`, case-insensitive, optionally spelled `KB`/`KiB`/…).
+///
+/// Units are powers of 1024 in every spelling — `1MB` and `1MiB` both mean
+/// 1048576. Ops-facing sizes are meant in binary units, and honoring the
+/// SI/IEC distinction here would make `--max-artifact-size 512MB` quietly
+/// smaller than the 512 MiB default it is meant to raise.
+pub fn parse_size(s: &str) -> Result<usize, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty size".to_string());
+    }
+
+    let split = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    if split == 0 {
+        return Err(format!("invalid size value in '{s}' (expected a number)"));
+    }
+    let (digits, suffix) = s.split_at(split);
+
+    // `b`/`ib` is decoration on the unit letter: k, kb, and kib all mean 1024.
+    let suffix = suffix.trim().to_ascii_lowercase();
+    let unit = suffix
+        .strip_suffix("ib")
+        .or_else(|| suffix.strip_suffix('b'))
+        .unwrap_or(&suffix);
+    let mult: usize = match unit {
+        "" => 1,
+        "k" => 1024,
+        "m" => 1024 * 1024,
+        "g" => 1024 * 1024 * 1024,
+        _ => {
+            return Err(format!(
+                "invalid size unit '{suffix}' in '{s}' (use k, m, or g)"
+            ))
+        }
+    };
+
+    let value: usize = digits
+        .parse()
+        .map_err(|_| format!("invalid size value in '{s}'"))?;
+    value
+        .checked_mul(mult)
+        .ok_or_else(|| format!("size '{s}' is too large"))
 }
 
 /// Parses a comma/whitespace-separated package list into a lower-cased set.

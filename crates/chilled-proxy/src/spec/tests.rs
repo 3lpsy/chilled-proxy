@@ -157,3 +157,36 @@ fn errors_name_the_flag_and_the_spec() {
         "unexpected: {err}"
     );
 }
+
+#[test]
+fn size_caps_parse_per_mount_with_units() {
+    let spec = parse(
+        "pypi",
+        "name=pytorch,max-artifact-size=2g,max-metadata-size=128m",
+    )
+    .expect("spec parses");
+    assert_eq!(spec.max_artifact_size, Some(2 * 1024 * 1024 * 1024));
+    assert_eq!(spec.max_metadata_size, Some(128 * 1024 * 1024));
+    // Underscore spelling, as the other keys accept.
+    let spec = parse("pypi", "name=p,max_artifact_size=1024").expect("spec parses");
+    assert_eq!(spec.max_artifact_size, Some(1024));
+}
+
+#[test]
+fn size_caps_reject_repeats_and_junk() {
+    let err = parse("pypi", "name=p,max-artifact-size=1g,max-artifact-size=2g").unwrap_err();
+    assert!(
+        err.contains("twice") || err.contains("more than once"),
+        "unexpected: {err}"
+    );
+    let err = parse("pypi", "name=p,max-artifact-size=1potato").unwrap_err();
+    assert!(err.contains("invalid size unit"), "unexpected: {err}");
+}
+
+#[test]
+fn size_cap_keys_are_listed_as_accepted() {
+    // A typo'd key should point the operator at the real ones.
+    let err = parse("pypi", "name=p,max-artifact=1g").unwrap_err();
+    assert!(err.contains("max-artifact-size"), "unexpected: {err}");
+    assert!(err.contains("max-metadata-size"), "unexpected: {err}");
+}

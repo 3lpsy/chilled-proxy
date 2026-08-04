@@ -69,20 +69,33 @@ fn filename_extension_gate() {
 
 #[test]
 fn fhp_path_shape() {
+    // PyPI's own layout.
     assert_eq!(
         validate_fhp_path("packages/aa/bb/ccdd/foo-1.0.0.whl"),
         Some("foo-1.0.0.whl")
     );
+    // Other indexes use other layouts; a mount fronting one must still be able
+    // to serve its files, so depth is bounded rather than pinned.
+    assert_eq!(
+        validate_fhp_path("whl/cpu/torch-2.10.0+cpu-cp312-cp312-linux_aarch64.whl"),
+        Some("torch-2.10.0+cpu-cp312-cp312-linux_aarch64.whl")
+    );
+    assert_eq!(
+        validate_fhp_path("simple/foo-1.0.0.whl"),
+        Some("foo-1.0.0.whl")
+    );
+
     for bad in [
-        "packages/aa/bb/foo-1.0.0.whl",          // too few segments
-        "packages/aa/bb/cc/dd/foo-1.0.0.whl",    // too many segments
+        "foo-1.0.0.whl",                         // no directory segment
+        "a/b/c/d/e/f/g/h/i/foo-1.0.0.whl",       // deeper than the bound
         "packages/../bb/cc/foo-1.0.0.whl",       // traversal segment
         "packages/aa/bb/cc/foo.exe",             // bad extension
-        "notpackages/aa/bb/cc/foo-1.0.0.whl",    // wrong root
         "packages/aa/b\\b/cc/foo-1.0.0.whl",     // backslash
         "packages/aa/bb/cc/",                    // empty filename
         "packages/aa/bb/cc/foo-1.0.0.whl/extra", // trailing junk
         "packages/a:a/bb/cc/foo-1.0.0.whl",      // scheme char
+        "https://evil.test/foo-1.0.0.whl",       // absolute URL smuggle
+        "packages//bb/cc/foo-1.0.0.whl",         // empty segment
     ] {
         assert_eq!(validate_fhp_path(bad), None, "path: {bad}");
     }

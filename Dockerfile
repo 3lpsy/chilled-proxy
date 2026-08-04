@@ -56,6 +56,9 @@ EXPOSE 3080
 #   CHILLED_COOLDOWN             age-gate window, e.g. 7d   (0 = off)
 #   CHILLED_COOLDOWN_OVERRIDES   comma-separated exempt packages
 #   CHILLED_RESTRICT_DOWNLOADS   also refuse too-new downloads (boolean)
+#   CHILLED_MAX_METADATA_SIZE    upstream metadata cap, e.g. 64m (per-registry default)
+#   CHILLED_MAX_ARTIFACT_SIZE    upstream artifact cap, e.g. 512m (per-registry default;
+#                                bodies are buffered, so this is a memory ceiling too)
 #   CHILLED_ENABLE_METRICS       expose /metrics (boolean)
 #   CHILLED_LISTEN               listen address             (0.0.0.0:3080)
 #   CHILLED_LISTEN_UNIX          Unix socket path (overrides CHILLED_LISTEN)
@@ -66,6 +69,8 @@ EXPOSE 3080
 #   CHILLED_COOLDOWN_{CRATES,NPM,PYPI,MAVEN}
 #   CHILLED_CACHE_TTL_{CRATES,NPM,PYPI,MAVEN}
 #   CHILLED_COOLDOWN_OVERRIDES_{CRATES,NPM,PYPI,MAVEN}
+#   CHILLED_MAX_METADATA_SIZE_{CRATES,NPM,PYPI,MAVEN}
+#   CHILLED_MAX_ARTIFACT_SIZE_{CRATES,NPM,PYPI,MAVEN}
 #   CHILLED_RESTRICT_DOWNLOADS_{CRATES,NPM,PYPI,MAVEN}
 #   CHILLED_DISABLE_{CRATES,NPM,PYPI,MAVEN}   1/true to unmount a registry
 #

@@ -8,6 +8,8 @@ fn settings(cooldown_secs: u64, overrides: &[&str]) -> RegistrySettings {
         overrides: Arc::new(overrides.iter().map(|s| s.to_string()).collect()),
         restrict_downloads: false,
         proxy_url: Url::parse("http://localhost:3080/crates/").unwrap(),
+        max_metadata_size: 0x400_0000,
+        max_artifact_size: 0x1000_0000,
     }
 }
 
@@ -55,4 +57,38 @@ fn overrides_parse_lowercased() {
     assert!(set.contains("bar"));
     assert_eq!(set.len(), 4);
     assert!(parse_overrides("").is_empty());
+}
+
+#[test]
+fn parse_size_accepts_plain_bytes_and_units() {
+    assert_eq!(parse_size("0"), Ok(0));
+    assert_eq!(parse_size("268435456"), Ok(0x1000_0000));
+    assert_eq!(parse_size("1k"), Ok(1024));
+    assert_eq!(parse_size("512m"), Ok(512 * 1024 * 1024));
+    assert_eq!(parse_size("2g"), Ok(2 * 1024 * 1024 * 1024));
+    // Surrounding space is trimmed, like the other config parsers.
+    assert_eq!(parse_size("  4m  "), Ok(4 * 1024 * 1024));
+}
+
+#[test]
+fn parse_size_unit_spellings_are_all_binary() {
+    // `1MB` must not be 1_000_000: it is meant to raise a MiB-denominated
+    // default, and silently landing under it would be worse than an error.
+    for spelling in ["1m", "1M", "1mb", "1MB", "1mib", "1MiB"] {
+        assert_eq!(parse_size(spelling), Ok(1024 * 1024), "{spelling}");
+    }
+    for spelling in ["1b", "1B"] {
+        assert_eq!(parse_size(spelling), Ok(1), "{spelling}");
+    }
+}
+
+#[test]
+fn parse_size_rejects_junk() {
+    assert!(parse_size("").is_err());
+    assert!(parse_size("abc").is_err());
+    assert!(parse_size("512q").is_err());
+    assert!(parse_size("m").is_err());
+    assert!(parse_size("-1").is_err());
+    // Overflow is reported, not wrapped.
+    assert!(parse_size("99999999999999999999g").is_err());
 }

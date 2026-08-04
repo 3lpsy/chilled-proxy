@@ -105,10 +105,15 @@ async fn oversized_artifact_is_507() {
     use chilled_core::registry::RegistryProxy;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // A raw upstream declaring a Content-Length one byte over the 512 MiB cap
+    // A raw upstream declaring a Content-Length one byte over the default cap
     // (hyper-based mocks normalize the header away, so speak plain TCP).
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
+    // One byte over whatever this registry's default artifact cap is.
+    let over_cap_head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n",
+        maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE + 1
+    );
     tokio::spawn(async move {
         let mut open = Vec::new();
         loop {
@@ -117,9 +122,7 @@ async fn oversized_artifact_is_507() {
             };
             let mut buf = [0u8; 4096];
             let _ = sock.read(&mut buf).await;
-            let _ = sock
-                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 536870913\r\n\r\n")
-                .await;
+            let _ = sock.write_all(over_cap_head.as_bytes()).await;
             open.push(sock); // keep the connection open; the body never comes
         }
     });
@@ -131,6 +134,8 @@ async fn oversized_artifact_is_507() {
         cooldown: std::time::Duration::ZERO,
         overrides: std::sync::Arc::new(std::collections::HashSet::new()),
         restrict_downloads: false,
+        max_metadata_size: maven_proxy::DEFAULT_MAX_METADATA_SIZE,
+        max_artifact_size: maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         proxy_url: url::Url::parse("http://localhost:3080/maven/").unwrap(),
     };
     let config = maven_proxy::Config::new(

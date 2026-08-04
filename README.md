@@ -112,6 +112,8 @@ it. Env vars use the `CHILLED_*` prefix (flag name uppercased).
 | `--cache-ttl` | `--cache-ttl-crates` ... | `3600` |
 | `--cooldown-overrides` | `--cooldown-overrides-crates` ... (replaces the general list) | empty |
 | `--restrict-downloads` | `--restrict-downloads-crates` ... (`=false` opts a registry out) | off |
+| `--max-metadata-size` | `--max-metadata-size-crates` ... | per-registry (see below) |
+| `--max-artifact-size` | `--max-artifact-size-crates` ... | per-registry (see below) |
 | `--cache-dir` | (registries use `<cache-dir>/{crates,npm,pypi,maven}`) | `/var/cache/chilled` |
 | — | `--crates-path` `--npm-path` `--pypi-path` `--maven-path` | `/<registry>` |
 | — | `--crates-mount` `--npm-mount` `--pypi-mount` `--maven-mount` (repeatable) | see [Multiple mounts](#multiple-mounts) |
@@ -123,6 +125,70 @@ Registries are all enabled by default; unmount one with `--disable-crates`, `--d
 # 7-day cooldown everywhere, 2 days for npm, none for maven
 chilled-proxy --cooldown 7d --cooldown-npm 2d --cooldown-maven 0
 ```
+
+### Size caps
+
+An upstream response larger than its cap is refused with `507`, never truncated. Sizes accept
+`k`, `m`, and `g` suffixes (powers of 1024 in every spelling — `512MB` and `512MiB` both mean
+512 × 1024²). Unlike the other knobs these have no single default, because a 16 MiB crate and a
+512 MiB jar are both normal:
+
+| Registry | `--max-metadata-size` | `--max-artifact-size` |
+| --- | --- | --- |
+| crates.io | 64 MiB (index) | 16 MiB (`.crate`) |
+| npm | 64 MiB (packument) | 256 MiB (tarball) |
+| PyPI | 64 MiB (simple JSON) | 256 MiB (wheel/sdist) |
+| Maven | 8 MiB (`maven-metadata.xml`) | 512 MiB (jar/aar) |
+
+An unset flag leaves each registry on its own default; the general flag overrides all four, a
+per-registry flag overrides that, and a mount's `max-artifact-size` key overrides everything.
+
+Bodies are read into memory before being cached and served, so **`--max-artifact-size` is also a
+per-request memory ceiling**. Raising it far past the default trades a clean `507` for memory
+pressure under concurrency — size it against the RAM you can spare times the downloads you expect
+at once, not against the largest file in existence.
+
+Large ML wheels are the usual reason to raise it — CUDA wheels such as `nvidia-cudnn-cu13`
+(~349 MiB) exceed the 256 MiB PyPI default and are refused with `507`. They are published on
+PyPI, so they arrive through the ordinary PyPI mount and the per-registry flag is what moves:
+
+```
+chilled-proxy --max-artifact-size-pypi 512m
+```
+
+A mount pointed at the PyTorch index works too, and is the way to keep large ML
+wheels off the shared PyPI mount:
+
+```
+chilled-proxy --pypi-mount 'name=pytorch,\
+  upstream=https://download.pytorch.org/whl/cpu/,\
+  files=https://download-r2.pytorch.org/,\
+  cooldown=180d,max-artifact-size=2g'
+```
+
+`download.pytorch.org` serves a PEP 503 **HTML** index rather than PEP 691 JSON. The proxy
+normalizes HTML to the JSON model at ingest, so such a mount is age-gated, URL-rewritten, cached,
+and size-capped exactly like a JSON one — see [HTML upstreams](#html-upstreams).
+
+Note `files=` is the file host's **root**, not the directory the wheels sit in: the rewritten
+download URL carries the upstream path in full, so a `files=` that already includes `/whl/cpu/`
+produces a doubled prefix and 404s.
+
+### HTML upstreams
+
+PyPI publishes upload times only in its PEP 691 JSON API, so JSON is requested first and
+preferred. An index that answers with HTML is parsed into the same document model, which means a
+PEP 503-only mirror gets the full feature set rather than a degraded pass-through.
+
+Age-gating an HTML index needs a per-file upload time. PEP 503 has no standardized spelling for
+one, but indexes that publish it (PyTorch, devpi) use a `data-upload-time` attribute, and that is
+what the parser reads. The fail-closed rule is unchanged and applies per file: an entry without a
+usable upload time is withheld under a cooldown, and an index where *nothing* is datable is
+refused with `502 upstream index carries no upload times to age-gate on` rather than served
+ungated.
+
+Because `data-upload-time` is a convention rather than a standard, an index could stop emitting
+it. That degrades to the loud `502` above, never to silently ungated serving.
 
 ### Mount paths
 
@@ -178,6 +244,7 @@ artifacts. Everything else falls back to that registry's flags, then to the gene
 | `files` | PyPI | `--pypi-files-url` |
 | `proxy-url` | all | derived from `--listen` and the path |
 | `cooldown` `cache-ttl` `restrict-downloads` | all | the registry's flag, then the general one |
+| `max-metadata-size` `max-artifact-size` | all | the registry's flag, the general one, then its built-in default |
 
 Cooldown-override lists are not settable per mount — the spec grammar spends the comma on its own
 separator — so a mount inherits `--cooldown-overrides[-<registry>]`. In an env var, separate

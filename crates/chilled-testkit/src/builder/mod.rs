@@ -36,6 +36,8 @@ pub struct TestServerBuilder {
     proxy_url: Option<String>,
     dead_upstream: bool,
     prefix: String,
+    max_metadata_size: usize,
+    max_artifact_size: usize,
 }
 
 impl TestServerBuilder {
@@ -50,6 +52,10 @@ impl TestServerBuilder {
             proxy_url: None,
             dead_upstream: false,
             prefix: prefix.to_string(),
+            // Generous by default so size limits only matter to tests that ask
+            // for them; the real per-registry defaults live in each crate.
+            max_metadata_size: 0x400_0000,
+            max_artifact_size: 0x2000_0000,
         }
     }
 
@@ -76,6 +82,16 @@ impl TestServerBuilder {
 
     pub fn restrict_downloads(mut self) -> Self {
         self.restrict_downloads = true;
+        self
+    }
+
+    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
+        self.max_metadata_size = bytes;
+        self
+    }
+
+    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
+        self.max_artifact_size = bytes;
         self
     }
 
@@ -120,6 +136,8 @@ impl TestServerBuilder {
                 overrides: Arc::new(self.overrides),
                 restrict_downloads: self.restrict_downloads,
                 proxy_url: Url::parse(&proxy_url).unwrap(),
+                max_metadata_size: self.max_metadata_size,
+                max_artifact_size: self.max_artifact_size,
             },
         };
 

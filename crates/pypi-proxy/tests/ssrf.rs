@@ -30,14 +30,12 @@ fn simple_vectors() -> Vec<String> {
 /// Files-route vectors that must be rejected without contacting upstream.
 fn file_vectors() -> Vec<String> {
     vec![
-        "/files/foo/packages/%2e%2e/x/y/f.whl".into(), // traversal segment
-        "/files/foo/packages/aa/bb/cc/f.exe".into(),   // wrong extension
+        "/files/foo/packages/aa/bb/cc/f.exe".into(), // wrong extension
         "/files/foo/https://evil.com/a/b/f.whl".into(), // absolute URL smuggle
         "/files/foo/packages/aa%5Cbb/cc/dd/f.whl".into(), // encoded backslash
-        "/files/foo/packages/aa/bb/f.whl".into(),      // short shape
         "/files/Foo.Bar/packages/aa/bb/cc/f.whl".into(), // non-normalized project
         "/files/foo/packages/aa/bb/cc/%252e.whl".into(), // residual %
-        "/files/../packages/aa/bb/cc/f.whl".into(),    // project traversal
+        "/files/../packages/aa/bb/cc/f.whl".into(),  // project traversal
     ]
 }
 
@@ -60,6 +58,22 @@ async fn file_injection_vectors_are_rejected() {
         assert_eq!(resp.status(), 404, "path: {path}");
     }
     assert_eq!(proxy.upstream_total().await, 0);
+}
+
+#[tokio::test]
+async fn a_clean_path_of_an_unknown_layout_is_forwarded_and_404s() {
+    // Supporting indexes whose file layout is not PyPI's (PyTorch serves
+    // `whl/cpu/<file>`) means a clean, bounded path no longer has to match
+    // `packages/<a>/<b>/<hash>` to be tried. Such a path reaches the *pinned*
+    // files host and 404s there; it can never name a different host, escape the
+    // host's root, or carry a traversal segment — those stay rejected locally,
+    // which `file_injection_vectors_are_rejected` and the `validate_fhp_path`
+    // unit tests both cover.
+    let proxy = TestProxy::builder().start().await;
+    proxy.mock_file_status("f.whl", 404).await;
+
+    let resp = proxy.get_no_redirect("/files/foo/whl/cpu/f.whl").await;
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
