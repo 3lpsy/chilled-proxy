@@ -46,6 +46,8 @@ pub(crate) struct MountSpec {
     pub(crate) max_metadata_size: Option<usize>,
     /// Cap on an upstream artifact download.
     pub(crate) max_artifact_size: Option<usize>,
+    /// Extra hosts this mount's index may serve files from (PyPI only).
+    pub(crate) file_hosts: Vec<String>,
 }
 
 /// The registry-specific second URL key, for registries that have one.
@@ -70,6 +72,9 @@ fn accepted_keys(kind: &str) -> String {
         "max-metadata-size",
         "max-artifact-size",
     ];
+    if kind == "pypi" {
+        keys.push("file-hosts");
+    }
     if let Some(key) = secondary_key(kind) {
         keys.insert(3, key);
     }
@@ -91,6 +96,7 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
         restrict_downloads: None,
         max_metadata_size: None,
         max_artifact_size: None,
+        file_hosts: Vec::new(),
     };
     let mut seen_name = false;
 
@@ -171,6 +177,19 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
                     return Err(twice());
                 }
                 spec.max_artifact_size = Some(config::parse_size(value).map_err(err)?);
+            }
+            // Space-separated: the comma is already the pair separator.
+            "file-hosts" | "file_hosts" if kind == "pypi" => {
+                if !spec.file_hosts.is_empty() {
+                    return Err(twice());
+                }
+                spec.file_hosts = value
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                if spec.file_hosts.is_empty() {
+                    return Err(err("file-hosts is empty".to_owned()));
+                }
             }
             other if secondary_key(kind) == Some(other) => {
                 if spec.secondary.is_some() {

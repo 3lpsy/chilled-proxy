@@ -20,6 +20,7 @@ pub(crate) mod valid;
 /// defaults behind `--max-metadata-size` / `--max-artifact-size`.
 pub use constants::{DEFAULT_MAX_ARTIFACT_SIZE, DEFAULT_MAX_METADATA_SIZE};
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -52,13 +53,34 @@ pub struct Config {
     pub(crate) simple_dir: PathBuf,
     /// Distribution file cache directory (`<cache_dir>/files`).
     pub(crate) files_dir: PathBuf,
+    /// Hosts this mount may fetch distribution files from.
+    ///
+    /// An index names each file's host itself, and one index can spread its
+    /// files across several (PyTorch links `torch` at its own CDN, its
+    /// dependencies at PyPI's, and some wheels relatively). Resolving the host
+    /// from the document rather than from config is what makes those mounts
+    /// work — but it also means a hostile upstream could name *any* host, so
+    /// the resolved host must appear here or the download is refused.
+    pub(crate) file_hosts: HashSet<String>,
 }
 
 impl Config {
     /// Builds a configuration, deriving the `simple`/`files` cache
     /// subdirectories from the settings' cache dir.
     #[must_use]
-    pub fn new(upstream_url: Url, files_url: Url, mut settings: RegistrySettings) -> Self {
+    pub fn new(upstream_url: Url, files_url: Url, settings: RegistrySettings) -> Self {
+        Config::with_file_hosts(upstream_url, files_url, settings, &[])
+    }
+
+    /// As [`Config::new`], plus extra hosts this mount's index is allowed to
+    /// serve files from, plainly declared by the operator.
+    #[must_use]
+    pub fn with_file_hosts(
+        upstream_url: Url,
+        files_url: Url,
+        mut settings: RegistrySettings,
+        extra_file_hosts: &[String],
+    ) -> Self {
         let simple_dir = settings.cache_dir.join("simple");
         let files_dir = settings.cache_dir.join("files");
         // PEP 503-normalize override entries so `Foo.Bar` matches `foo-bar`.
@@ -69,13 +91,35 @@ impl Config {
                 .map(|name| valid::normalize(name))
                 .collect(),
         );
+        // The index's own host covers relative links; the files host covers the
+        // ordinary single-host case. Both are already operator-chosen.
+        let mut file_hosts = HashSet::new();
+        for url in [&upstream_url, &files_url] {
+            if let Some(host) = url.host_str() {
+                file_hosts.insert(host.to_ascii_lowercase());
+            }
+        }
+        file_hosts.extend(
+            extra_file_hosts
+                .iter()
+                .map(|h| h.trim().to_ascii_lowercase())
+                .filter(|h| !h.is_empty()),
+        );
+
         Config {
             upstream_url,
             files_url,
             settings,
             simple_dir,
             files_dir,
+            file_hosts,
         }
+    }
+
+    /// Whether this mount may fetch a distribution file from `url`.
+    pub(crate) fn allows_file_host(&self, url: &Url) -> bool {
+        url.host_str()
+            .is_some_and(|host| self.file_hosts.contains(&host.to_ascii_lowercase()))
     }
 
     /// The age-gating cutoff for a normalized project, or `None` if unfiltered.

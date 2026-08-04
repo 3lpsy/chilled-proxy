@@ -143,6 +143,10 @@ pub struct Cli {
     #[arg(long, env = "CHILLED_MAX_ARTIFACT_SIZE_NPM", value_parser = config::parse_size)]
     pub max_artifact_size_npm: Option<usize>,
 
+    /// Extra hosts PyPI mounts may fetch distribution files from, space-separated.
+    #[arg(long, env = "CHILLED_PYPI_FILE_HOSTS")]
+    pub pypi_file_hosts: Option<String>,
+
     /// Artifact size cap for PyPI only.
     #[arg(long, env = "CHILLED_MAX_ARTIFACT_SIZE_PYPI", value_parser = config::parse_size)]
     pub max_artifact_size_pypi: Option<usize>,

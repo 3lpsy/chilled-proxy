@@ -70,7 +70,12 @@ fn build_registry(instance: &RegistryInstance, client: &reqwest::Client) -> Arc<
             Arc::new(npm_proxy::NpmProxy::new(config, client.clone()))
         }
         "pypi" => {
-            let config = pypi_proxy::Config::new(upstream, second("files"), settings);
+            let config = pypi_proxy::Config::with_file_hosts(
+                upstream,
+                second("files"),
+                settings,
+                &instance.file_hosts,
+            );
             Arc::new(pypi_proxy::PypiProxy::new(config, client.clone()))
         }
         "maven" => {

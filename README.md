@@ -166,13 +166,34 @@ chilled-proxy --pypi-mount 'name=pytorch,\
   cooldown=180d,max-artifact-size=2g'
 ```
 
-`download.pytorch.org` serves a PEP 503 **HTML** index rather than PEP 691 JSON. The proxy
-normalizes HTML to the JSON model at ingest, so such a mount is age-gated, URL-rewritten, cached,
-and size-capped exactly like a JSON one — see [HTML upstreams](#html-upstreams).
+`download.pytorch.org` serves a PEP 503 **HTML** index rather than PEP 691 JSON, and spreads its
+files across more than one host — see [HTML upstreams](#html-upstreams) and
+[Multi-host indexes](#multi-host-indexes) for what each part of that line is doing.
 
-Note `files=` is the file host's **root**, not the directory the wheels sit in: the rewritten
-download URL carries the upstream path in full, so a `files=` that already includes `/whl/cpu/`
-produces a doubled prefix and 404s.
+### Multi-host indexes
+
+PyPI keeps every file on one host, so `--pypi-files-url` can name it once. An index is free not
+to: PyTorch links `torch` at its own CDN, its dependencies at PyPI's, and some wheels relatively.
+Reconstructing every download against a single pinned host can only ever serve one of those
+slices; the rest 404.
+
+So the file's host is read from the index document, which is the only place that knows it. That
+host is upstream-controlled, so it is honored only when you have allowed it:
+
+```
+--pypi-mount 'name=pytorch,...,file-hosts=download-r2.pytorch.org'
+--pypi-file-hosts 'host-a.example host-b.example'    # general, space-separated
+```
+
+The allowlist already contains the mount's own index host (covering relative links) and its
+`files=` host, so an ordinary PyPI mount needs no configuration. A host that is *not* allowed
+falls back to substituting `files=`, exactly as before — that fallback is what lets
+`--pypi-files-url` point at an internal mirror of PyPI's file host. When the fallback is wrong
+(a genuinely multi-host index), the proxy logs which host it skipped and how to allow it.
+
+Age-gating and `--restrict-downloads` are unaffected: both already read the same cached index
+document, and now the gate and the download resolve from the *same entry*, so they cannot
+disagree about which file they mean.
 
 ### HTML upstreams
 

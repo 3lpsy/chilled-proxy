@@ -35,6 +35,9 @@ pub struct RegistryInstance {
     pub settings: RegistrySettings,
     /// Credentials and headers sent with this mount's upstream requests.
     pub auth: UpstreamAuth,
+    /// Extra hosts a PyPI mount may fetch distribution files from, beyond its
+    /// own index and file hosts. Empty for other registries.
+    pub file_hosts: Vec<String>,
 }
 
 impl Cli {
@@ -132,6 +135,7 @@ impl Cli {
                     upstream: ensure_trailing_slash(&upstream),
                     secondary: secondary.as_ref().map(ensure_trailing_slash),
                     auth: UpstreamAuth::default(),
+                    file_hosts: self.file_hosts_for(kind, None),
                 });
 
                 // A registry at `/` owns the whole listener, so its built-ins
@@ -152,6 +156,7 @@ impl Cli {
                             secondary: secondary.as_ref().map(ensure_trailing_slash),
                             settings: self.settings_for(kind, name, path, None),
                             auth: UpstreamAuth::default(),
+                            file_hosts: self.file_hosts_for(kind, None),
                         });
                     }
                 }
@@ -167,6 +172,7 @@ impl Cli {
                 let (upstream, secondary) = self.default_upstreams(kind);
                 let upstream = spec.upstream.clone().unwrap_or(upstream);
                 let secondary = spec.secondary.clone().or(secondary);
+                let file_hosts = self.file_hosts_for(kind, Some(&spec));
                 out.push(RegistryInstance {
                     kind,
                     settings: self.settings_for(kind, &spec.name, &path, Some(&spec)),
@@ -175,6 +181,7 @@ impl Cli {
                     upstream: ensure_trailing_slash(&upstream),
                     secondary: secondary.as_ref().map(ensure_trailing_slash),
                     auth: UpstreamAuth::default(),
+                    file_hosts,
                 });
             }
         }
@@ -200,6 +207,24 @@ impl Cli {
 
     /// Resolves each mount's upstream credentials and headers, and refuses auth
     /// aimed at a mount that is not served.
+    /// Extra file hosts for one mount: its own key, else the general PyPI flag.
+    /// Only PyPI resolves files by host, so other registries get nothing.
+    fn file_hosts_for(&self, kind: &str, spec: Option<&MountSpec>) -> Vec<String> {
+        if kind != "pypi" {
+            return Vec::new();
+        }
+        match spec.map(|s| &s.file_hosts) {
+            Some(hosts) if !hosts.is_empty() => hosts.clone(),
+            _ => self
+                .pypi_file_hosts
+                .as_deref()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
     pub(super) fn attach_auth(
         &self,
         instances: &mut [RegistryInstance],

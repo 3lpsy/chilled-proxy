@@ -14,12 +14,14 @@ use super::fixtures::SIMPLE_CTYPE;
 /// Configures and starts a [`TestProxy`] (PyPI registry mounted at `/pypi`).
 pub struct TestProxyBuilder {
     inner: TestServerBuilder,
+    file_hosts: Vec<String>,
 }
 
 impl TestProxyBuilder {
     pub fn new() -> Self {
         TestProxyBuilder {
             inner: TestServerBuilder::new("/pypi"),
+            file_hosts: Vec::new(),
         }
     }
 
@@ -68,15 +70,23 @@ impl TestProxyBuilder {
         self
     }
 
+    /// Extra hosts the mount may fetch distribution files from.
+    pub fn file_hosts(mut self, hosts: &[&str]) -> Self {
+        self.file_hosts = hosts.iter().map(|h| (*h).to_string()).collect();
+        self
+    }
+
     pub async fn start(self) -> TestProxy {
+        let file_hosts = self.file_hosts.clone();
         let server = self
             .inner
-            .start(|ctx| {
+            .start(move |ctx| {
                 // Both the simple index and the files host point at the mock.
-                let config = pypi_proxy::Config::new(
+                let config = pypi_proxy::Config::with_file_hosts(
                     ctx.upstream.clone(),
                     ctx.upstream.clone(),
                     ctx.settings.clone(),
+                    &file_hosts,
                 );
                 PypiProxy::new(config, reqwest::Client::new()).router()
             })
