@@ -9,7 +9,7 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 authors = ["3lpsy"]
 edition = "2021"
 homepage = "https://github.com/3lpsy/chilled-proxy"
