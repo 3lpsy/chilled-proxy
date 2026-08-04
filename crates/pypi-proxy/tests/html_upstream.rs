@@ -86,15 +86,18 @@ async fn file_urls_from_html_are_rewritten_through_the_proxy() {
 }
 
 #[tokio::test]
-async fn an_html_index_without_upload_times_is_refused_under_cooldown() {
-    // Fail-closed: nothing datable means the cooldown cannot be honored, and a
-    // loud 502 beats silently serving an ungated index.
+async fn an_html_index_without_upload_times_withholds_every_file() {
+    // Fail-closed: nothing datable means nothing may be served under a
+    // cooldown. It is an *empty index* rather than an error, matching what the
+    // per-file rule already does when every file is filtered — which is what
+    // lets a resolver fall through to an index that can date the package.
     let proxy = html_proxy(1, &[("foo-1.0.0.tar.gz", "", SHA)]).await;
 
     let resp = proxy.get_simple("foo", JSON_ACCEPT).await;
-    assert_eq!(resp.status(), 502);
-    let body = resp.text().await.unwrap();
-    assert!(body.contains("upload times"), "body: {body}");
+    assert_eq!(resp.status(), 200);
+    let doc: serde_json::Value = resp.json().await.unwrap();
+    assert!(doc["files"].as_array().unwrap().is_empty());
+    assert!(doc["versions"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

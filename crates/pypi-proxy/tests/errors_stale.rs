@@ -68,8 +68,13 @@ async fn html_only_upstream_fails_closed_under_cooldown() {
         .mock_simple_ctype("foo", "<html>mirror</html>", "\"e1\"", "text/html")
         .await;
 
-    // Cannot gate what it cannot parse -> refuse rather than serve ungated.
-    assert_eq!(proxy.get_simple("foo", JSON_ACCEPT).await.status(), 502);
+    // Nothing datable -> withhold every file rather than serve ungated. Served
+    // as an empty index, not an error, so a resolver can fall through to an
+    // index that does date the package instead of aborting.
+    let resp = proxy.get_simple("foo", JSON_ACCEPT).await;
+    assert_eq!(resp.status(), 200);
+    let doc: serde_json::Value = resp.json().await.unwrap();
+    assert!(doc["files"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

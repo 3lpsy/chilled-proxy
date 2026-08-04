@@ -204,12 +204,31 @@ PEP 503-only mirror gets the full feature set rather than a degraded pass-throug
 Age-gating an HTML index needs a per-file upload time. PEP 503 has no standardized spelling for
 one, but indexes that publish it (PyTorch, devpi) use a `data-upload-time` attribute, and that is
 what the parser reads. The fail-closed rule is unchanged and applies per file: an entry without a
-usable upload time is withheld under a cooldown, and an index where *nothing* is datable is
-refused with `502 upstream index carries no upload times to age-gate on` rather than served
-ungated.
+usable upload time is withheld under a cooldown.
+
+An index where *nothing* is datable therefore serves an **empty** index — every file withheld —
+rather than an error. That is deliberate: a resolver reads "no versions here" and falls through
+to another index that *can* date the package, so a mount fronting an undated slice coexists with
+a gated PyPI mount instead of aborting the whole resolution. Nothing ungated is ever served, and
+the proxy logs loudly which project it withheld.
 
 Because `data-upload-time` is a convention rather than a standard, an index could stop emitting
-it. That degrades to the loud `502` above, never to silently ungated serving.
+it. That degrades to an empty index plus a warning, never to silently ungated serving.
+
+**Gating an index that only dates some of its projects.** The PyTorch index dates `torch` and
+`torchvision` but not their dependencies, so a cooldown on that mount gates the former and
+withholds the latter. Resolve the two from the indexes that can date them:
+
+```
+# torch wheels from the gated pytorch mount
+uv pip install --no-deps --default-index "$PYTORCH_REGISTRY" torch torchvision
+# their dependencies from the gated PyPI mount
+uv pip install -r requirements.txt          # UV_DEFAULT_INDEX = the PyPI mount
+```
+
+Both halves are then age-gated. `--index-strategy unsafe-best-match` across both mounts also
+works, but it turns off uv's dependency-confusion protection, which is at odds with running a
+gating proxy in the first place.
 
 ### Mount paths
 

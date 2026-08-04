@@ -24,6 +24,18 @@ use crate::routes::pypi::fetch::{download_simple, is_json_simple, passthrough_re
 use crate::state::AppState;
 use crate::{filter, render, Config};
 
+/// A syntactically valid simple index with no files, used when a cooldown
+/// cannot be honored for any of them.
+fn empty_index(name: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "meta": {"api-version": "1.0"},
+        "name": name,
+        "versions": [],
+        "files": [],
+    }))
+    .unwrap_or_default()
+}
+
 pub(super) fn with_vary(mut response: Response) -> Response {
     response
         .headers_mut()
@@ -213,15 +225,20 @@ async fn forward_project(
 
     match response.status {
         200 if response.undatable && state.config.cutoff_for(name).is_some() => {
-            error!(
-                "cooldown: simple index for {name} carries no upload times; \
-                 refusing to serve ungated"
+            // Fail closed, but as an *empty index* rather than an error: the
+            // per-file rule already withholds every undatable file, and pypi
+            // serves an emptied document rather than 404ing. Staying consistent
+            // matters practically — a resolver reads "no versions here" and
+            // falls through to another index that can date the package, which
+            // is how a mount fronting an undated index (PyTorch's dependency
+            // slice) coexists with a gated PyPI mount. An error would abort the
+            // whole resolution instead.
+            warn!(
+                "cooldown: simple index for {name} carries no upload times; withholding every \
+                 file (resolvers will see no versions — serve {name} from an index that dates it)"
             );
-            text_response(
-                502,
-                TEXT_CTYPE,
-                "upstream index carries no upload times to age-gate on\n".into(),
-            )
+            let empty = empty_index(name);
+            project_ok(&response.entry, empty, state, name, fmt).await
         }
         200 if !is_json_simple(&response.ctype) => {
             if state.config.cutoff_for(name).is_some() {
