@@ -7,7 +7,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -18,8 +18,12 @@ use clap::builder::BoolishValueParser;
 use clap::Parser;
 use url::Url;
 
-use crate::constants::{DEFAULT_CACHE_DIR, DEFAULT_CACHE_TTL_SECS, LISTEN_ADDRESS, REGISTRY_IDS};
+use crate::auth::{self, UpstreamAuth};
+use crate::constants::{
+    DEFAULT_CACHE_DIR, DEFAULT_CACHE_TTL_SECS, DEFAULT_MOUNTS, LISTEN_ADDRESS, REGISTRY_IDS,
+};
 use crate::mount;
+use crate::spec::{self, MountSpec};
 
 /// Command-line arguments (each also populated from its `CHILLED_*` env var).
 #[derive(Parser, Debug)]
@@ -226,6 +230,81 @@ pub struct Cli {
     /// External URL of this proxy's /maven mount (default derived from --listen).
     #[arg(long, env = "CHILLED_MAVEN_PROXY_URL")]
     pub maven_proxy_url: Option<Url>,
+
+    // Extra mounts of a registry, each with its own upstream. Repeat the flag,
+    // or separate specs with `;` in the env var.
+    /// Extra crates.io mount: `name=..[,path=..,index=..,upstream=..,cooldown=..]`.
+    #[arg(
+        long = "crates-mount",
+        env = "CHILLED_CRATES_MOUNTS",
+        value_delimiter = ';'
+    )]
+    pub crates_mounts: Vec<String>,
+
+    /// Extra npm mount: `name=..[,path=..,upstream=..,cooldown=..]`.
+    #[arg(long = "npm-mount", env = "CHILLED_NPM_MOUNTS", value_delimiter = ';')]
+    pub npm_mounts: Vec<String>,
+
+    /// Extra PyPI mount: `name=..[,path=..,upstream=..,files=..,cooldown=..]`.
+    #[arg(
+        long = "pypi-mount",
+        env = "CHILLED_PYPI_MOUNTS",
+        value_delimiter = ';'
+    )]
+    pub pypi_mounts: Vec<String>,
+
+    /// Extra Maven mount: `name=..[,path=..,upstream=..,cooldown=..]`.
+    #[arg(
+        long = "maven-mount",
+        env = "CHILLED_MAVEN_MOUNTS",
+        value_delimiter = ';'
+    )]
+    pub maven_mounts: Vec<String>,
+
+    /// Do not serve the built-in extra mounts (Gradle Plugin Portal, Google Maven).
+    #[arg(long, env = "CHILLED_NO_DEFAULT_MOUNTS", value_parser = BoolishValueParser::new())]
+    pub no_default_mounts: bool,
+
+    // Upstream authentication, per mount. Prefer the per-mount env vars for
+    // secrets: an argv value is visible to anything that can read `ps`.
+    /// Upstream credentials for a mount: `<mount>=<user>:<password>` (repeatable).
+    #[arg(
+        long = "upstream-basic-auth",
+        env = "CHILLED_UPSTREAM_BASIC_AUTH",
+        value_delimiter = ';'
+    )]
+    pub upstream_basic_auth: Vec<String>,
+
+    /// Extra upstream header for a mount: `<mount>=<header>: <value>` (repeatable).
+    #[arg(
+        long = "upstream-header",
+        env = "CHILLED_UPSTREAM_HEADERS",
+        value_delimiter = ';'
+    )]
+    pub upstream_headers: Vec<String>,
+}
+
+/// One mounted registry instance: a registry kind served at a path, with its
+/// own upstream and settings. A registry can be mounted more than once.
+#[derive(Debug, Clone)]
+pub struct RegistryInstance {
+    /// Registry kind: `crates`, `npm`, `pypi`, or `maven`.
+    pub kind: &'static str,
+    /// Instance name — the `/metrics` key and cache subdirectory. Unique per
+    /// process; the default instance of a registry is named after its kind.
+    pub name: String,
+    /// Mount path on this proxy.
+    pub path: String,
+    /// Primary upstream: crates.io downloads, the npm registry, the PyPI simple
+    /// index, or the Maven repository.
+    pub upstream: Url,
+    /// The registry's second URL where it has one: the crates.io sparse index
+    /// or the PyPI file host.
+    pub secondary: Option<Url>,
+    /// Cooldown, cache, and mount settings resolved for this instance.
+    pub settings: RegistrySettings,
+    /// Credentials and headers sent with this mount's upstream requests.
+    pub auth: UpstreamAuth,
 }
 
 impl Cli {
@@ -269,23 +348,244 @@ impl Cli {
         }
     }
 
-    /// The enabled registries paired with their mounts, in mount order.
-    pub fn mounts(&self) -> Vec<(&'static str, String)> {
-        REGISTRY_IDS
-            .iter()
-            .filter(|id| self.is_enabled(id))
-            .map(|id| (*id, self.mount_path(id).to_owned()))
-            .collect()
+    /// The `--<registry>-mount` specs given for a registry.
+    fn mount_specs(&self, id: &str) -> &[String] {
+        match id {
+            "crates" => &self.crates_mounts,
+            "npm" => &self.npm_mounts,
+            "pypi" => &self.pypi_mounts,
+            "maven" => &self.maven_mounts,
+            other => unreachable!("unknown registry id: {other}"),
+        }
+    }
+
+    /// A registry's default upstream URLs: `(primary, secondary)`.
+    fn default_upstreams(&self, id: &str) -> (Url, Option<Url>) {
+        match id {
+            "crates" => (
+                self.crates_upstream_url.clone(),
+                Some(self.crates_index_url.clone()),
+            ),
+            "npm" => (self.npm_upstream_url.clone(), None),
+            "pypi" => (
+                self.pypi_upstream_url.clone(),
+                Some(self.pypi_files_url.clone()),
+            ),
+            "maven" => (self.maven_upstream_url.clone(), None),
+            other => unreachable!("unknown registry id: {other}"),
+        }
+    }
+
+    /// Every mount this process will serve: each enabled registry's default
+    /// instance, followed by its extra `--<registry>-mount` instances.
+    pub fn instances(&self) -> Result<Vec<RegistryInstance>, String> {
+        let mut out: Vec<RegistryInstance> = Vec::new();
+
+        for kind in REGISTRY_IDS {
+            // Parsed up front: an explicit mount replaces the built-in default
+            // of the same name rather than colliding with it.
+            let specs = self
+                .mount_specs(kind)
+                .iter()
+                .map(|raw| spec::parse(kind, raw))
+                .collect::<Result<Vec<MountSpec>, String>>()?;
+
+            if self.is_enabled(kind) {
+                let (upstream, secondary) = self.default_upstreams(kind);
+                let path = self.mount_path(kind).to_owned();
+                let at_root = path == "/";
+                out.push(RegistryInstance {
+                    kind,
+                    name: kind.to_owned(),
+                    settings: self.settings_for(kind, kind, &path, None),
+                    path,
+                    upstream: ensure_trailing_slash(&upstream),
+                    secondary: secondary.as_ref().map(ensure_trailing_slash),
+                    auth: UpstreamAuth::default(),
+                });
+
+                // A registry at `/` owns the whole listener, so its built-ins
+                // have nowhere to go — that layout stays single-mount.
+                if !self.no_default_mounts && !at_root {
+                    for (_, name, path, upstream) in
+                        DEFAULT_MOUNTS.iter().filter(|(reg, ..)| *reg == kind)
+                    {
+                        if specs.iter().any(|s| s.name == *name) {
+                            continue;
+                        }
+                        out.push(RegistryInstance {
+                            kind,
+                            name: (*name).to_owned(),
+                            path: (*path).to_owned(),
+                            upstream: Url::parse(upstream)
+                                .expect("built-in mount upstreams are valid URLs"),
+                            secondary: secondary.as_ref().map(ensure_trailing_slash),
+                            settings: self.settings_for(kind, name, path, None),
+                            auth: UpstreamAuth::default(),
+                        });
+                    }
+                }
+            }
+
+            // Extra mounts stand on their own, so a registry can be disabled at
+            // its default path and still be served from named mounts.
+            for spec in specs {
+                let path = match &spec.path {
+                    Some(path) => path.clone(),
+                    None => mount::parse(&format!("/{}", spec.name))?,
+                };
+                let (upstream, secondary) = self.default_upstreams(kind);
+                let upstream = spec.upstream.clone().unwrap_or(upstream);
+                let secondary = spec.secondary.clone().or(secondary);
+                out.push(RegistryInstance {
+                    kind,
+                    settings: self.settings_for(kind, &spec.name, &path, Some(&spec)),
+                    name: spec.name,
+                    path,
+                    upstream: ensure_trailing_slash(&upstream),
+                    secondary: secondary.as_ref().map(ensure_trailing_slash),
+                    auth: UpstreamAuth::default(),
+                });
+            }
+        }
+
+        for (index, instance) in out.iter().enumerate() {
+            if let Some(prior) = out[..index].iter().find(|o| o.name == instance.name) {
+                return Err(format!(
+                    "mount name '{}' is used twice (by {} and {}); a name keys the cache \
+                     directory and the /metrics report, so it must be unique",
+                    instance.name, prior.kind, instance.kind
+                ));
+            }
+        }
+
+        self.attach_auth(&mut out, &|key| {
+            // An empty value reads as unset, so a cleared variable does not
+            // become an empty credential.
+            std::env::var(key).ok().filter(|v| !v.is_empty())
+        })?;
+
+        Ok(out)
+    }
+
+    /// Resolves each mount's upstream credentials and headers, and refuses auth
+    /// aimed at a mount that is not served.
+    fn attach_auth(
+        &self,
+        instances: &mut [RegistryInstance],
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(), String> {
+        let mut basic: HashMap<String, (String, String)> = HashMap::new();
+        for raw in &self.upstream_basic_auth {
+            let (mount, credentials) = auth::parse_basic_spec(raw)?;
+            if basic.insert(mount.clone(), credentials).is_some() {
+                return Err(format!("--upstream-basic-auth names mount '{mount}' twice"));
+            }
+        }
+        let mut headers: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for raw in &self.upstream_headers {
+            let (mount, pair) = auth::parse_header_spec(raw)?;
+            headers.entry(mount).or_default().push(pair);
+        }
+
+        // Auth aimed at a mount that is not served would leave the real one
+        // unauthenticated, surfacing as an upstream 401 much later.
+        let served: HashSet<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+        for mount in basic.keys().chain(headers.keys()) {
+            if !served.contains(mount.as_str()) {
+                return Err(format!(
+                    "upstream auth names mount '{mount}', which is not served; mounted: {}",
+                    served.iter().copied().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        self.check_auth_env(instances, env)?;
+
+        for instance in instances.iter_mut() {
+            instance.auth = auth::resolve(
+                &instance.name,
+                basic.get(&instance.name),
+                headers.get(&instance.name).map_or(&[][..], Vec::as_slice),
+                env,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Refuses `CHILLED_<NAME>_*` auth variables whose mount is not served, and
+    /// mount names that collide once folded into an env token.
+    fn check_auth_env(
+        &self,
+        instances: &[RegistryInstance],
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<(), String> {
+        let mut tokens: HashMap<String, &str> = HashMap::new();
+        for instance in instances {
+            let token = auth::env_token(&instance.name);
+            if let Some(prior) = tokens.insert(token.clone(), &instance.name) {
+                return Err(format!(
+                    "mounts '{prior}' and '{}' both read CHILLED_{token}_* auth variables; \
+                     rename one",
+                    instance.name
+                ));
+            }
+        }
+
+        for (key, _) in std::env::vars() {
+            // The global flag variables end in a matching suffix but name no mount.
+            if key == "CHILLED_UPSTREAM_HEADERS" || key == "CHILLED_UPSTREAM_BASIC_AUTH" {
+                continue;
+            }
+            let Some(rest) = key.strip_prefix("CHILLED_") else {
+                continue;
+            };
+            // A suffix carries its own leading `_`, so what precedes it is the
+            // mount token — and must be non-empty.
+            let Some(suffix) = auth::ENV_SUFFIXES
+                .iter()
+                .find(|s| rest.len() > s.len() && rest.ends_with(**s))
+            else {
+                continue;
+            };
+            let token = &rest[..rest.len() - suffix.len()];
+            // Only complain about a variable that is actually set.
+            if env(&key).is_none() || tokens.contains_key(token) {
+                continue;
+            }
+            return Err(format!(
+                "{key} names mount token '{token}', which no mount reads; mounted: {}",
+                tokens.values().copied().collect::<Vec<_>>().join(", ")
+            ));
+        }
+        Ok(())
     }
 
     /// Validates the mounts against each other (root exclusivity, duplicates,
-    /// reserved endpoints). Call before building the router.
+    /// nesting, reserved endpoints) and the mount specs' own syntax. Call
+    /// before building the router.
     pub fn check_mounts(&self) -> Result<(), String> {
-        mount::check(&self.mounts())
+        let instances = self.instances()?;
+        let mounts: Vec<(&str, String)> = instances
+            .iter()
+            .map(|i| (i.name.as_str(), i.path.clone()))
+            .collect();
+        mount::check(&mounts)
     }
 
-    /// Resolves one registry's settings from the general flags + its overrides.
+    /// Resolves a registry's default-instance settings.
     pub fn registry_settings(&self, id: &str) -> RegistrySettings {
+        self.settings_for(id, id, self.mount_path(id), None)
+    }
+
+    /// Resolves one instance's settings: a spec value wins over the registry
+    /// flag, which wins over the general flag.
+    fn settings_for(
+        &self,
+        id: &str,
+        name: &str,
+        path: &str,
+        spec: Option<&MountSpec>,
+    ) -> RegistrySettings {
         let (cooldown, ttl, overrides, restrict, proxy_url) = match id {
             "crates" => (
                 self.cooldown_crates,
@@ -318,21 +618,41 @@ impl Cli {
             other => unreachable!("unknown registry id: {other}"),
         };
 
+        // Override *lists* are not settable per mount: the spec grammar spends
+        // the comma on its own separator.
         let override_set: HashSet<String> = match overrides {
             Some(list) => parse_overrides(list),
             None => parse_overrides(&self.cooldown_overrides),
         };
 
+        // `--<registry>-proxy-url` names the registry's own mount, so it applies
+        // to the default instance only; any other mount states its own or has it
+        // derived from its path.
+        let proxy_url = match spec {
+            Some(spec) => spec.proxy_url.clone(),
+            None if name == id => proxy_url.clone(),
+            None => None,
+        };
+
         RegistrySettings {
-            cache_dir: Path::new(&self.cache_dir).join(id),
-            cache_ttl: Duration::from_secs(ttl.unwrap_or(self.cache_ttl)),
-            cooldown: cooldown.unwrap_or(self.cooldown),
+            cache_dir: Path::new(&self.cache_dir).join(name),
+            cache_ttl: Duration::from_secs(
+                spec.and_then(|s| s.cache_ttl)
+                    .or(ttl)
+                    .unwrap_or(self.cache_ttl),
+            ),
+            cooldown: spec
+                .and_then(|s| s.cooldown)
+                .or(cooldown)
+                .unwrap_or(self.cooldown),
             overrides: std::sync::Arc::new(override_set),
-            restrict_downloads: restrict.unwrap_or(self.restrict_downloads),
+            restrict_downloads: spec
+                .and_then(|s| s.restrict_downloads)
+                .or(restrict)
+                .unwrap_or(self.restrict_downloads),
             proxy_url: proxy_url
-                .clone()
                 .map(|u| ensure_trailing_slash(&u))
-                .unwrap_or_else(|| self.default_proxy_url(self.mount_path(id))),
+                .unwrap_or_else(|| self.default_proxy_url(path)),
         }
     }
 

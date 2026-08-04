@@ -24,7 +24,28 @@ use crate::valid::is_version;
 /// keeping a many-versioned artifact's first request to seconds, not minutes.
 const PROBE_CONCURRENCY: usize = 12;
 
-/// Probes the POM of one version, returning its age stamp (never fails).
+/// What a POM probe learned about one version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Probed {
+    /// Upstream answered; `stamp` is its publish time, or a fail-closed
+    /// first-seen guess when the response carried no usable `Last-Modified`.
+    Stamped(Stamp),
+    /// Upstream said the POM is not there (404/410). That is an answer, not a
+    /// failure: this repository does not carry the version at all.
+    Absent,
+}
+
+impl Probed {
+    /// The stamp to record, treating an absent version as fail-closed.
+    pub(crate) fn stamp(self) -> Stamp {
+        match self {
+            Probed::Stamped(stamp) => stamp,
+            Probed::Absent => first_seen_now(),
+        }
+    }
+}
+
+/// Probes the POM of one version (never fails).
 ///
 /// The version comes from upstream XML, so it is validated here: an absolute
 /// URL or traversal in `<version>` would otherwise redirect the probe off the
@@ -34,10 +55,10 @@ pub(crate) async fn probe_version(
     upstream: &Url,
     coords: &MavenCoords,
     version: &str,
-) -> Stamp {
+) -> Probed {
     if !is_version(version) {
         warn!("cooldown: refusing to probe {coords} with malformed version {version:?}");
-        return first_seen_now();
+        return Probed::Stamped(first_seen_now());
     }
     let url = upstream
         .join(&coords.pom_rel(version))
@@ -49,6 +70,16 @@ pub(crate) async fn probe_version(
             .get(LAST_MODIFIED)
             .and_then(|v| v.to_str().ok())
             .map(ToOwned::to_owned),
+        // A mount serves one repository, and a build routinely asks each of its
+        // repositories for artifacts only another one carries. Absent is not
+        // "unverifiable" — reporting it as gated would be a lie.
+        Ok(resp) if matches!(resp.status().as_u16(), 404 | 410) => {
+            debug!(
+                "cooldown: pom probe for {coords}:{version} got HTTP {} — not in this repository",
+                resp.status().as_u16()
+            );
+            return Probed::Absent;
+        }
         Ok(resp) => {
             warn!(
                 "cooldown: pom probe for {coords}:{version} got HTTP {}",
@@ -61,7 +92,7 @@ pub(crate) async fn probe_version(
             None
         }
     };
-    stamp_from_last_modified(header.as_deref())
+    Probed::Stamped(stamp_from_last_modified(header.as_deref()))
 }
 
 /// Ensures `times` has a usable stamp for every version, probing the missing
@@ -98,7 +129,12 @@ pub(crate) async fn probe_versions(
                 (*version).clone(),
             );
             set.spawn(async move {
-                let stamp = probe_version(&client, &upstream, &coords, &version).await;
+                // Metadata filtering keeps the fail-closed reading: a version
+                // the metadata lists but whose POM is missing cannot be dated,
+                // so it stays hidden rather than being served undated.
+                let stamp = probe_version(&client, &upstream, &coords, &version)
+                    .await
+                    .stamp();
                 (version, stamp)
             });
         }

@@ -604,37 +604,72 @@ fn ctype_for(file: &str) -> &'static str {
     }
 }
 
+/// The download gate's verdict for one version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    /// Old enough to serve.
+    Allow,
+    /// Inside the cooldown window, or undatable — refuse (403).
+    Refuse,
+    /// Upstream does not carry this version at all — not found (404).
+    NotFound,
+}
+
+impl From<bool> for Gate {
+    fn from(old_enough: bool) -> Self {
+        if old_enough {
+            Gate::Allow
+        } else {
+            Gate::Refuse
+        }
+    }
+}
+
 /// Whether this version may be downloaded under `--restrict-downloads`.
 ///
 /// **Fail-closed**: the sidecar age (probed on demand — Maven fetches pinned
-/// artifacts without reading metadata first) must exist and be `<= cutoff`.
+/// artifacts without reading metadata first) must exist and be `<= cutoff`,
+/// with the one exception that upstream reporting the version absent is a
+/// definite answer and becomes a 404 rather than a refusal.
 async fn artifact_old_enough(
     state: &AppState,
     coords: &MavenCoords,
     version: &str,
     cutoff: u64,
-) -> bool {
+) -> Gate {
     let side_path = sidecar_path(state, coords);
     let load_path = side_path.clone();
     let Ok(mut times) = tokio::task::spawn_blocking(move || VersionTimes::load(&load_path)).await
     else {
-        return false;
+        return Gate::Refuse;
     };
 
     // A first-seen guess is retried while it still gates, so a transient probe
     // failure does not refuse an old artifact for a whole window.
     if let Some(ts) = times.get(version) {
         if !(times.is_provisional(version) && ts > cutoff) {
-            return ts <= cutoff;
+            return Gate::from(ts <= cutoff);
         }
     }
 
-    let stamp =
-        probe::probe_version(&state.client, &state.config.upstream_url, coords, version).await;
+    let stamp = match probe::probe_version(
+        &state.client,
+        &state.config.upstream_url,
+        coords,
+        version,
+    )
+    .await
+    {
+        probe::Probed::Stamped(stamp) => stamp,
+        // Nothing to record: the version is not in this repository, so a
+        // first-seen stamp would only pollute the sidecar with a version that
+        // does not exist — and gate it for a window if it ever appears.
+        probe::Probed::Absent => return Gate::NotFound,
+    };
     let ts = stamp.ts;
     times.insert(version.to_owned(), stamp);
     let _ = tokio::task::spawn_blocking(move || times.save(&side_path)).await;
-    ts <= cutoff
+    Gate::from(ts <= cutoff)
 }
 
 /// Downloads an artifact file from upstream; errors come back as ready-made
@@ -679,9 +714,18 @@ async fn serve_artifact(
     // Fail-closed download gate, before any cache read.
     if state.config.settings.restrict_downloads {
         if let Some(cutoff) = state.config.cutoff_for(coords) {
-            if !artifact_old_enough(state, coords, version, cutoff).await {
-                warn!("download: refused {coords}:{version}: newer than cooldown or unverifiable");
-                return plain_error(403, "version is within the cooldown window");
+            match artifact_old_enough(state, coords, version, cutoff).await {
+                Gate::Allow => {}
+                Gate::Refuse => {
+                    warn!(
+                        "download: refused {coords}:{version}: newer than cooldown or unverifiable"
+                    );
+                    return plain_error(403, "version is within the cooldown window");
+                }
+                Gate::NotFound => {
+                    debug!("download: {coords}:{version} is not in this repository");
+                    return plain_error(404, "not found");
+                }
             }
         }
     }

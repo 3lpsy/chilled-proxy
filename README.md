@@ -21,9 +21,11 @@ Each registry is mounted under a path prefix on a single port (default `3080`):
 | `/crates` | crates.io | `.cargo/config.toml` sparse index |
 | `/npm` | npm | `.npmrc` `registry=` |
 | `/pypi` | PyPI | pip/uv `index-url` |
-| `/maven` | Maven Central | `settings.xml` mirror / Gradle repo |
+| `/maven` | Maven Central | `settings.xml` mirror / Gradle init script |
 
-The mounts are configurable — see [Mount paths](#mount-paths).
+Maven also gets `/gradle-plugins` and `/google-maven` out of the box, since a Gradle build needs
+all three. The mounts are configurable — see [Mount paths](#mount-paths) and
+[Multiple mounts](#multiple-mounts).
 
 ```
 # server: 7-day cooldown for every registry
@@ -64,11 +66,40 @@ index-url = http://proxy.example.com:3080/pypi/simple/
 </mirror></mirrors>
 ```
 
-**Gradle**:
+**Gradle** — Gradle does not read the `<mirrors>` section of `~/.m2/settings.xml`, so the Maven
+setting above has no effect on a Gradle build. Copy
+[`examples/gradle/chilled.init.gradle`](examples/gradle/chilled.init.gradle) into `~/.gradle/init.d/`
+(or pass it with `-I`) and name the proxy:
 
-```kotlin
-repositories { maven { url = uri("http://proxy.example.com:3080/maven") } }
 ```
+export CHILLED_PROXY_URL=http://proxy.example.com:3080
+gradle build
+```
+
+A Gradle build resolves from three Maven-layout repositories, and a mount serves one upstream, so
+the server mounts all three out of the box — the script maps each to its default mount:
+
+| Upstream | Default mount |
+| --- | --- |
+| Maven Central | `/maven` |
+| Gradle Plugin Portal (`plugins { }` blocks) | `/gradle-plugins` |
+| Google Maven — AndroidX, AGP | `/google-maven` |
+
+Override any one with `CHILLED_MAVEN_URL`, `CHILLED_MAVEN_PLUGINS_URL`, or
+`CHILLED_MAVEN_GOOGLE_URL` — to name a non-default mount path, or to leave that upstream direct.
+An upstream with neither is **not** age-gated. Every variable also reads a system property
+(`chilled.proxy.url`, `chilled.maven.url`, `.plugins.url`, `.google.url`), so it can live in
+`gradle.properties`.
+
+The script rewrites repository URLs in place — across `pluginManagement`,
+`dependencyResolutionManagement`, the `settings.gradle` `buildscript`, and project `buildscript`
+and `repositories` blocks — so a build using `RepositoriesMode.FAIL_ON_PROJECT_REPOS` keeps
+working. Run with `--info` to see what it changed.
+
+The settings-level blocks are hooked from `beforeSettings` rather than `settingsEvaluated`,
+because a `plugins { }` block or a `buildscript { }` classpath in `settings.gradle` resolves
+*while* the settings script is evaluated — a later hook would let those two reach the real
+upstream ungated.
 
 ### General vs per-registry knobs
 
@@ -83,6 +114,7 @@ it. Env vars use the `CHILLED_*` prefix (flag name uppercased).
 | `--restrict-downloads` | `--restrict-downloads-crates` ... (`=false` opts a registry out) | off |
 | `--cache-dir` | (registries use `<cache-dir>/{crates,npm,pypi,maven}`) | `/var/cache/chilled` |
 | — | `--crates-path` `--npm-path` `--pypi-path` `--maven-path` | `/<registry>` |
+| — | `--crates-mount` `--npm-mount` `--pypi-mount` `--maven-mount` (repeatable) | see [Multiple mounts](#multiple-mounts) |
 
 Registries are all enabled by default; unmount one with `--disable-crates`, `--disable-npm`,
 `--disable-pypi`, or `--disable-maven`.
@@ -117,8 +149,96 @@ with one of them is unreachable in that layout.
 
 **Reserved paths.** `/healthz`, `/metrics`, `/ui`, and `/api` — and anything beneath them — are
 kept for the server; `/ui` and `/api` are held for a future management plane and web UI. Mounts
-must also be distinct from one another. All of this is checked at startup, before the listener
-binds, so a bad configuration fails immediately rather than half-serving.
+must also be distinct from one another, and none may nest inside another. All of this is checked
+at startup, before the listener binds, so a bad configuration fails immediately rather than
+half-serving.
+
+### Multiple mounts
+
+A mount serves one upstream, so a registry with more than one — Maven Central plus the Gradle
+Plugin Portal, an internal mirror alongside the public one — needs a mount each. Repeat
+`--<registry>-mount` with a comma-separated `key=value` spec:
+
+```
+chilled-proxy --cooldown 7d \
+  --maven-mount name=internal,upstream=https://nexus.corp.example.com/repository/maven-public/ \
+  --npm-mount   name=npm-fast,path=/npm-edge,cooldown=1d
+```
+
+Only `name` is required. It identifies the mount in `/metrics`, names its cache subdirectory, and
+supplies the default path (`/<name>`) — so two mounts of one registry never share cached
+artifacts. Everything else falls back to that registry's flags, then to the general ones.
+
+| Key | Applies to | Default |
+| --- | --- | --- |
+| `name` | all | *required* |
+| `path` | all | `/<name>` |
+| `upstream` | all | the registry's `--<registry>-upstream-url` |
+| `index` | crates.io | `--crates-index-url` |
+| `files` | PyPI | `--pypi-files-url` |
+| `proxy-url` | all | derived from `--listen` and the path |
+| `cooldown` `cache-ttl` `restrict-downloads` | all | the registry's flag, then the general one |
+
+Cooldown-override lists are not settable per mount — the spec grammar spends the comma on its own
+separator — so a mount inherits `--cooldown-overrides[-<registry>]`. In an env var, separate
+whole specs with `;`: `CHILLED_MAVEN_MOUNTS='name=internal,upstream=…;name=snapshots,path=/snap'`.
+
+**Built-in mounts.** Because gating Maven Central alone leaves Gradle's plugins and AndroidX
+ungated, two extra Maven mounts are served by default:
+
+| Mount | Upstream |
+| --- | --- |
+| `/gradle-plugins` | `https://plugins.gradle.org/m2/` |
+| `/google-maven` | `https://dl.google.com/dl/android/maven2/` |
+
+They inherit Maven's cooldown and cache settings. A `--maven-mount` of the same name replaces one
+(to move its path or change its upstream), `--no-default-mounts` drops both, and `--disable-maven`
+takes them with it. They are also skipped when Maven is mounted at `/`, which owns the listener.
+
+### Upstream authentication
+
+A private upstream — an internal Nexus or Artifactory, a token-gated registry — takes credentials
+per mount, as HTTP basic auth or as arbitrary headers. Both are attached to every upstream request
+that mount makes.
+
+Prefer the per-mount environment variables for secrets. `<NAME>` is the mount name uppercased with
+`-` and `.` folded to `_`, so the `gradle-plugins` mount reads `CHILLED_GRADLE_PLUGINS_*`:
+
+```
+CHILLED_INTERNAL_BASIC_AUTH_USERNAME=ci
+CHILLED_INTERNAL_BASIC_AUTH_PASSWORD=s3cr3t
+CHILLED_INTERNAL_HEADERS='X-Build: nightly; X-Team: platform'
+```
+
+The same thing on the command line, repeatable, one mount per value:
+
+```
+chilled-proxy \
+  --maven-mount name=internal,upstream=https://nexus.corp.example.com/repository/maven-public/ \
+  --upstream-basic-auth 'internal=ci:s3cr3t' \
+  --upstream-header 'internal=X-Build: nightly'
+```
+
+Headers are not limited to authentication — any valid header works, which covers token schemes
+that are not basic auth (`--upstream-header 'internal=Authorization: Bearer <token>'`) as well as
+routing or tracing headers your upstream wants. Setting both basic auth and an explicit
+`Authorization` header on one mount is refused rather than silently resolved.
+
+Notes worth knowing:
+
+- **Argv is visible.** Anything passed as a flag can be read from `ps` by other users on the host;
+  the environment variables exist for that reason. Docker secrets or a systemd `EnvironmentFile`
+  are better still.
+- **Credentials do not cross mounts.** Each authenticated mount gets its own HTTP client, so a
+  mount you did not configure sends nothing — even to the same upstream host.
+- **Both of a mount's URLs carry them.** The crates.io mount authenticates its index *and* its
+  download host; PyPI its simple index *and* its file host. Both are URLs you configured for that
+  mount.
+- **Typos fail at startup.** Auth naming a mount that is not served, half a credential pair, or
+  two mounts folding to the same `CHILLED_<NAME>_*` token are all refused before the listener
+  binds — the alternative is an unauthenticated mount that surfaces as an upstream 401 much later.
+- **Nothing is logged.** Credentials are marked sensitive, so they stay out of debug output, and
+  a `user:pass@host` upstream URL is masked in the startup log.
 
 ### Exempting packages from the cooldown
 

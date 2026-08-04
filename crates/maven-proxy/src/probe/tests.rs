@@ -50,9 +50,12 @@ async fn malformed_upstream_version_is_never_probed() {
     let coords = MavenCoords::new(&["com", "example"], "thing");
 
     for hostile in ["http://evil.example/x", "../../etc/passwd", "a/b"] {
-        let stamp = probe_version(&client, &upstream, &coords, hostile).await;
-        // Fail-closed: recorded as first-seen now, with no request made.
-        assert_eq!(stamp.src, FIRST_SEEN_SRC);
+        let probed = probe_version(&client, &upstream, &coords, hostile).await;
+        // Fail-closed: recorded as first-seen now, with no request made. A
+        // rejected version is never reported absent — that would turn a hostile
+        // version string into a plain 404 instead of a gated one.
+        assert_eq!(probed.clone().stamp().src, FIRST_SEEN_SRC);
+        assert!(matches!(probed, Probed::Stamped(_)));
     }
 }
 

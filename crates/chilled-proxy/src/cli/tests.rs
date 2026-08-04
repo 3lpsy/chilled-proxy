@@ -248,3 +248,462 @@ fn malformed_mount_fails_at_parse_time() {
     assert!(Cli::try_parse_from(["chilled-proxy", "--npm-path", "relative"]).is_err());
     assert!(Cli::try_parse_from(["chilled-proxy", "--npm-path", "/../etc"]).is_err());
 }
+
+// ---------------------------------------------------------------------------
+// Extra mounts (`--<registry>-mount`).
+// ---------------------------------------------------------------------------
+
+/// The instance named `name`, or a panic naming what was actually built.
+fn instance<'a>(instances: &'a [RegistryInstance], name: &str) -> &'a RegistryInstance {
+    instances
+        .iter()
+        .find(|i| i.name == name)
+        .unwrap_or_else(|| {
+            let built: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+            panic!("no mount named '{name}' among {built:?}")
+        })
+}
+
+#[test]
+fn default_instances_are_named_after_their_registry() {
+    let instances = parse(&[]).instances().unwrap();
+    let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "crates",
+            "npm",
+            "pypi",
+            "maven",
+            "gradle-plugins",
+            "google-maven"
+        ]
+    );
+
+    let maven = instance(&instances, "maven");
+    assert_eq!(maven.kind, "maven");
+    assert_eq!(maven.path, "/maven");
+    assert_eq!(maven.secondary, None);
+    // crates.io and PyPI carry a second URL; npm and Maven do not.
+    assert!(instance(&instances, "crates").secondary.is_some());
+    assert!(instance(&instances, "pypi").secondary.is_some());
+    assert_eq!(instance(&instances, "npm").secondary, None);
+}
+
+#[test]
+fn an_extra_mount_gets_its_own_upstream_path_and_cache() {
+    let cli = parse(&[
+        "--maven-mount",
+        "name=plugins,upstream=https://plugins.gradle.org/m2/",
+    ]);
+    let instances = cli.instances().unwrap();
+    let plugins = instance(&instances, "plugins");
+
+    assert_eq!(plugins.kind, "maven");
+    assert_eq!(plugins.upstream.as_str(), "https://plugins.gradle.org/m2/");
+    // The path defaults to the name, and the cache directory follows it so two
+    // mounts of one registry never share cached artifacts.
+    assert_eq!(plugins.path, "/plugins");
+    assert_eq!(
+        plugins.settings.cache_dir,
+        Path::new("/var/cache/chilled").join("plugins")
+    );
+    assert_eq!(
+        plugins.settings.proxy_url.as_str(),
+        "http://localhost:3080/plugins/"
+    );
+    // The registry's own mount is untouched.
+    assert_eq!(instance(&instances, "maven").path, "/maven");
+}
+
+#[test]
+fn an_upstream_without_a_trailing_slash_is_normalized() {
+    // Upstreams are joined against, so a missing slash would silently drop the
+    // last path segment.
+    let cli = parse(&[
+        "--maven-mount",
+        "name=plugins,upstream=https://plugins.gradle.org/m2",
+    ]);
+    let instances = cli.instances().unwrap();
+    assert_eq!(
+        instance(&instances, "plugins").upstream.as_str(),
+        "https://plugins.gradle.org/m2/"
+    );
+}
+
+#[test]
+fn a_mount_spec_overrides_registry_and_general_flags() {
+    let cli = parse(&[
+        "--cooldown",
+        "7d",
+        "--cooldown-maven",
+        "3d",
+        "--restrict-downloads",
+        "--maven-mount",
+        "name=plugins,cooldown=1d,cache-ttl=90,restrict-downloads=false",
+    ]);
+    let instances = cli.instances().unwrap();
+
+    let plugins = instance(&instances, "plugins");
+    assert_eq!(plugins.settings.cooldown, Duration::from_secs(86_400));
+    assert_eq!(plugins.settings.cache_ttl, Duration::from_secs(90));
+    assert!(!plugins.settings.restrict_downloads);
+
+    // Unset spec keys fall back to the registry flag, then the general one.
+    let maven = instance(&instances, "maven");
+    assert_eq!(maven.settings.cooldown, Duration::from_secs(3 * 86_400));
+    assert!(maven.settings.restrict_downloads);
+}
+
+#[test]
+fn an_extra_mount_inherits_the_registry_upstream_when_it_names_none() {
+    // Two mounts of one upstream, differing only in cooldown, is a valid setup.
+    let cli = parse(&[
+        "--maven-upstream-url",
+        "https://repo.example.com/maven2/",
+        "--maven-mount",
+        "name=fresh,cooldown=0",
+    ]);
+    let instances = cli.instances().unwrap();
+    assert_eq!(
+        instance(&instances, "fresh").upstream.as_str(),
+        "https://repo.example.com/maven2/"
+    );
+}
+
+#[test]
+fn extra_mounts_survive_disabling_the_default_one() {
+    let cli = parse(&[
+        "--disable-maven",
+        "--maven-mount",
+        "name=plugins,upstream=https://plugins.gradle.org/m2/",
+    ]);
+    let instances = cli.instances().unwrap();
+    assert!(instances.iter().all(|i| i.name != "maven"));
+    assert_eq!(instance(&instances, "plugins").kind, "maven");
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn every_registry_takes_extra_mounts() {
+    let cli = parse(&[
+        "--crates-mount",
+        "name=c2,index=https://index.example.com/,upstream=https://dl.example.com/",
+        "--npm-mount",
+        "name=n2,upstream=https://npm.example.com/",
+        "--pypi-mount",
+        "name=p2,upstream=https://pypi.example.com/simple/,files=https://files.example.com/",
+        "--maven-mount",
+        "name=m2,upstream=https://maven.example.com/",
+    ]);
+    let instances = cli.instances().unwrap();
+
+    let c2 = instance(&instances, "c2");
+    assert_eq!(c2.upstream.as_str(), "https://dl.example.com/");
+    assert_eq!(
+        c2.secondary.as_ref().map(Url::as_str),
+        Some("https://index.example.com/")
+    );
+    let p2 = instance(&instances, "p2");
+    assert_eq!(p2.upstream.as_str(), "https://pypi.example.com/simple/");
+    assert_eq!(
+        p2.secondary.as_ref().map(Url::as_str),
+        Some("https://files.example.com/")
+    );
+    assert_eq!(instance(&instances, "n2").kind, "npm");
+    assert_eq!(instance(&instances, "m2").kind, "maven");
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn a_registry_takes_more_than_one_extra_mount() {
+    let cli = parse(&[
+        "--maven-mount",
+        "name=plugins,upstream=https://plugins.gradle.org/m2/",
+        "--maven-mount",
+        "name=google,upstream=https://dl.google.com/dl/android/maven2/",
+    ]);
+    let instances = cli.instances().unwrap();
+    assert_eq!(instance(&instances, "plugins").path, "/plugins");
+    assert_eq!(instance(&instances, "google").path, "/google");
+    assert!(cli.check_mounts().is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Built-in extra mounts.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn gradles_other_upstreams_are_mounted_out_of_the_box() {
+    // Gating only Central would leave `plugins { }` and AndroidX ungated.
+    let cli = parse(&["--cooldown", "7d"]);
+    let instances = cli.instances().unwrap();
+
+    let portal = instance(&instances, "gradle-plugins");
+    assert_eq!(portal.kind, "maven");
+    assert_eq!(portal.path, "/gradle-plugins");
+    assert_eq!(portal.upstream.as_str(), "https://plugins.gradle.org/m2/");
+
+    let google = instance(&instances, "google-maven");
+    assert_eq!(google.path, "/google-maven");
+    assert_eq!(
+        google.upstream.as_str(),
+        "https://dl.google.com/dl/android/maven2/"
+    );
+
+    // They inherit the cooldown, so the default deployment gates all three.
+    for name in ["maven", "gradle-plugins", "google-maven"] {
+        assert_eq!(
+            instance(&instances, name).settings.cooldown,
+            Duration::from_secs(604_800),
+            "{name} should inherit the general cooldown"
+        );
+    }
+    // Each keeps its own cache and its own derived proxy URL.
+    assert_eq!(
+        portal.settings.cache_dir,
+        Path::new("/var/cache/chilled").join("gradle-plugins")
+    );
+    assert_eq!(
+        portal.settings.proxy_url.as_str(),
+        "http://localhost:3080/gradle-plugins/"
+    );
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn built_in_mounts_can_be_turned_off() {
+    let instances = parse(&["--no-default-mounts"]).instances().unwrap();
+    let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["crates", "npm", "pypi", "maven"]);
+}
+
+#[test]
+fn disabling_maven_takes_its_built_in_mounts_with_it() {
+    let instances = parse(&["--disable-maven"]).instances().unwrap();
+    let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["crates", "npm", "pypi"]);
+}
+
+#[test]
+fn an_explicit_mount_replaces_the_built_in_of_the_same_name() {
+    // Rather than colliding on the name, which would be a startup error.
+    let cli = parse(&[
+        "--maven-mount",
+        "name=gradle-plugins,path=/portal,upstream=https://mirror.example.com/m2/,cooldown=1d",
+    ]);
+    let instances = cli.instances().unwrap();
+
+    let portal = instance(&instances, "gradle-plugins");
+    assert_eq!(portal.path, "/portal");
+    assert_eq!(portal.upstream.as_str(), "https://mirror.example.com/m2/");
+    assert_eq!(portal.settings.cooldown, Duration::from_secs(86_400));
+    // Exactly one mount claims the name.
+    assert_eq!(
+        instances
+            .iter()
+            .filter(|i| i.name == "gradle-plugins")
+            .count(),
+        1
+    );
+    // The other built-in is untouched.
+    assert_eq!(instance(&instances, "google-maven").path, "/google-maven");
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn a_root_mount_suppresses_its_built_ins() {
+    // A registry at `/` owns the listener, so its built-ins have nowhere to go.
+    let cli = parse(&[
+        "--maven-path",
+        "/",
+        "--disable-crates",
+        "--disable-npm",
+        "--disable-pypi",
+    ]);
+    let instances = cli.instances().unwrap();
+    let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, ["maven"]);
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn built_in_mounts_do_not_disturb_a_root_deployment() {
+    // The documented single-ecosystem layout still starts cleanly.
+    let cli = parse(&[
+        "--npm-path",
+        "/",
+        "--disable-crates",
+        "--disable-pypi",
+        "--disable-maven",
+    ]);
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn one_env_var_can_hold_several_specs() {
+    // `;` separates specs so a single CHILLED_MAVEN_MOUNTS can carry a fleet.
+    let cli = parse(&["--maven-mount", "name=plugins;name=google"]);
+    let instances = cli.instances().unwrap();
+    assert_eq!(instance(&instances, "plugins").kind, "maven");
+    assert_eq!(instance(&instances, "google").kind, "maven");
+}
+
+#[test]
+fn duplicate_mount_names_are_rejected() {
+    // Names key the cache directory, so a collision would cross-contaminate it.
+    let cli = parse(&[
+        "--maven-mount",
+        "name=plugins",
+        "--npm-mount",
+        "name=plugins",
+    ]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("used twice"), "unexpected: {err}");
+
+    // Including a collision with a registry's own default instance.
+    let cli = parse(&["--npm-mount", "name=maven"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("used twice"), "unexpected: {err}");
+}
+
+#[test]
+fn nested_mounts_are_rejected() {
+    // `/maven` and `/maven/plugins` have no unambiguous routing.
+    let cli = parse(&["--maven-mount", "name=plugins,path=/maven/plugins"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("nested"), "unexpected: {err}");
+
+    // A sibling path that merely shares a prefix is fine.
+    let cli = parse(&["--maven-mount", "name=plugins,path=/maven-plugins"]);
+    assert!(cli.check_mounts().is_ok());
+}
+
+#[test]
+fn a_bad_spec_is_reported_by_check_mounts() {
+    let cli = parse(&["--maven-mount", "path=/plugins"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(
+        err.contains("missing required key 'name'"),
+        "unexpected: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Upstream authentication.
+// ---------------------------------------------------------------------------
+
+/// Resolves auth over a fixed environment instead of the process's own.
+fn with_env(cli: &Cli, pairs: &[(&str, &str)]) -> Result<Vec<RegistryInstance>, String> {
+    let env: std::collections::HashMap<String, String> = pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    let mut instances = cli.instances()?;
+    cli.attach_auth(&mut instances, &|key| env.get(key).cloned())?;
+    Ok(instances)
+}
+
+#[test]
+fn mounts_have_no_auth_by_default() {
+    let instances = parse(&[]).instances().unwrap();
+    assert!(instances.iter().all(|i| i.auth.is_empty()));
+}
+
+#[test]
+fn cli_auth_lands_on_the_named_mount_only() {
+    let cli = parse(&[
+        "--upstream-basic-auth",
+        "gradle-plugins=alice:s3cr3t",
+        "--upstream-header",
+        "maven=X-Build: ci",
+    ]);
+    let instances = cli.instances().unwrap();
+
+    assert_eq!(
+        instance(&instances, "gradle-plugins").auth.describe(),
+        Some("basic auth".to_owned())
+    );
+    assert_eq!(
+        instance(&instances, "maven").auth.describe(),
+        Some("1 custom header(s)".to_owned())
+    );
+    // Nothing bleeds onto the other mounts.
+    assert!(instance(&instances, "google-maven").auth.is_empty());
+    assert!(instance(&instances, "npm").auth.is_empty());
+}
+
+#[test]
+fn auth_for_an_unserved_mount_is_rejected() {
+    // Otherwise the mount that was meant to be authenticated silently is not,
+    // which shows up as an upstream 401 long after startup.
+    let cli = parse(&["--upstream-basic-auth", "typo=alice:s3cr3t"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("is not served"), "unexpected: {err}");
+
+    let cli = parse(&["--upstream-header", "typo=X-Build: ci"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("is not served"), "unexpected: {err}");
+}
+
+#[test]
+fn auth_naming_a_mount_twice_is_rejected() {
+    let cli = parse(&[
+        "--upstream-basic-auth",
+        "maven=alice:one",
+        "--upstream-basic-auth",
+        "maven=bob:two",
+    ]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("twice"), "unexpected: {err}");
+}
+
+#[test]
+fn env_auth_reaches_the_mount_that_owns_the_token() {
+    let cli = parse(&[]);
+    let instances = with_env(
+        &cli,
+        &[
+            ("CHILLED_GRADLE_PLUGINS_BASIC_AUTH_USERNAME", "alice"),
+            ("CHILLED_GRADLE_PLUGINS_BASIC_AUTH_PASSWORD", "s3cr3t"),
+            ("CHILLED_MAVEN_HEADERS", "X-Build: ci"),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        instance(&instances, "gradle-plugins").auth.describe(),
+        Some("basic auth".to_owned())
+    );
+    assert_eq!(
+        instance(&instances, "maven").auth.describe(),
+        Some("1 custom header(s)".to_owned())
+    );
+    assert!(instance(&instances, "google-maven").auth.is_empty());
+}
+
+#[test]
+fn a_custom_mount_reads_its_own_env_token() {
+    let cli = parse(&["--maven-mount", "name=corp.internal"]);
+    let instances = with_env(
+        &cli,
+        &[
+            ("CHILLED_CORP_INTERNAL_BASIC_AUTH_USERNAME", "alice"),
+            ("CHILLED_CORP_INTERNAL_BASIC_AUTH_PASSWORD", "s3cr3t"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        instance(&instances, "corp.internal").auth.describe(),
+        Some("basic auth".to_owned())
+    );
+}
+
+#[test]
+fn mounts_colliding_on_an_env_token_are_rejected() {
+    // `a-b` and `a.b` both fold to CHILLED_A_B_*, so one would silently take
+    // the other's credentials.
+    let cli = parse(&["--maven-mount", "name=a-b", "--npm-mount", "name=a.b"]);
+    let err = cli.check_mounts().unwrap_err();
+    assert!(err.contains("both read CHILLED_A_B_"), "unexpected: {err}");
+}

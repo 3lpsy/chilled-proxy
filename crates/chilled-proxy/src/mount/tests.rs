@@ -92,3 +92,45 @@ fn distinct_mounts_pass() {
     ])
     .is_ok());
 }
+
+#[test]
+fn nested_mounts_are_rejected() {
+    // Several mounts of one registry make this reachable; axum has no
+    // unambiguous routing for it, so it is refused at startup.
+    let err = check(&[
+        ("maven", "/maven".into()),
+        ("plugins", "/maven/plugins".into()),
+    ])
+    .unwrap_err();
+    assert!(err.contains("nested"), "unexpected: {err}");
+
+    // The order the mounts arrive in does not matter.
+    let err = check(&[
+        ("plugins", "/maven/plugins".into()),
+        ("maven", "/maven".into()),
+    ])
+    .unwrap_err();
+    assert!(err.contains("nested"), "unexpected: {err}");
+}
+
+#[test]
+fn sharing_a_prefix_is_not_nesting() {
+    // `/maven-plugins` is a sibling of `/maven`, not a child of it.
+    assert!(check(&[
+        ("maven", "/maven".into()),
+        ("plugins", "/maven-plugins".into()),
+        ("deep", "/a/b".into()),
+        ("sibling", "/a/c".into()),
+    ])
+    .is_ok());
+}
+
+#[test]
+fn several_mounts_of_one_registry_are_allowed() {
+    assert!(check(&[
+        ("maven", "/maven".into()),
+        ("plugins", "/gradle-plugins".into()),
+        ("google", "/google".into()),
+    ])
+    .is_ok());
+}

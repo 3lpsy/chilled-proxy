@@ -18,7 +18,7 @@ fn home_json(state: &TopState) -> String {
     let ids: Vec<String> = state
         .registries
         .iter()
-        .map(|r| format!(r#""{}""#, r.id()))
+        .map(|r| format!(r#""{}""#, r.name))
         .collect();
     format!(r#"{{"status":"running","registries":[{}]}}"#, ids.join(","))
 }

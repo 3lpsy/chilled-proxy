@@ -77,6 +77,18 @@ EXPOSE 3080
 #   CHILLED_PYPI_FILES_URL       (https://files.pythonhosted.org/)
 #   CHILLED_MAVEN_UPSTREAM_URL   (https://repo.maven.apache.org/maven2/)
 #   CHILLED_{CRATES,NPM,PYPI,MAVEN}_PROXY_URL   external mount URLs
+#
+# Extra mounts (one upstream each; `;` separates whole specs):
+#   CHILLED_{CRATES,NPM,PYPI,MAVEN}_MOUNTS
+#     e.g. CHILLED_MAVEN_MOUNTS='name=internal,upstream=https://nexus.example.com/maven2/'
+#   CHILLED_NO_DEFAULT_MOUNTS    drop the built-in /gradle-plugins and
+#                                /google-maven mounts (boolean)
+#
+# Upstream auth, per mount (<NAME> is the mount name uppercased, `-`/`.`->`_`):
+#   CHILLED_<NAME>_BASIC_AUTH_USERNAME / _PASSWORD
+#   CHILLED_<NAME>_HEADERS       'X-Build: ci; X-Team: platform'
+# Prefer these over --upstream-basic-auth / --upstream-header: an argv value is
+# readable from `ps`. Mount the values as secrets rather than baking them in.
 
 # Run the proxy server (info logging to stdout). ENTRYPOINT (not CMD) so that
 # flags passed to `docker run <image> --flag ...` append to the binary instead

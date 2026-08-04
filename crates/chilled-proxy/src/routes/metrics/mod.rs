@@ -16,7 +16,7 @@ pub(crate) async fn handle_metrics(State(state): State<TopState>) -> Response {
     let scan = tokio::task::spawn_blocking(move || {
         registries
             .iter()
-            .map(|r| (r.id(), r.cache_stats()))
+            .map(|r| (r.name.clone(), r.proxy.cache_stats()))
             .collect::<Vec<_>>()
     })
     .await;
@@ -27,11 +27,11 @@ pub(crate) async fn handle_metrics(State(state): State<TopState>) -> Response {
     }
 }
 
-/// Builds the metrics JSON document from per-registry cache stats.
-fn metrics_json(stats: &[(&str, CacheStats)]) -> String {
+/// Builds the metrics JSON document from per-mount cache stats.
+fn metrics_json<S: AsRef<str>>(stats: &[(S, CacheStats)]) -> String {
     let registries: Vec<String> = stats
         .iter()
-        .map(|(id, s)| {
+        .map(|(name, s)| {
             let artifacts: Vec<String> = s
                 .artifacts
                 .iter()
@@ -46,7 +46,7 @@ fn metrics_json(stats: &[(&str, CacheStats)]) -> String {
                 .collect();
             format!(
                 r#""{}":{{"cached_count":{},"artifacts":[{}]}}"#,
-                id,
+                json_escape(name.as_ref()),
                 s.artifacts.len(),
                 artifacts.join(",")
             )

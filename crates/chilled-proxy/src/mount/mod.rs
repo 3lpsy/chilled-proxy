@@ -49,7 +49,9 @@ pub(crate) fn parse(raw: &str) -> Result<String, String> {
 }
 
 /// Checks the resolved mounts against each other: root is exclusive, mounts
-/// must be distinct, and none may shadow a top-level endpoint.
+/// must be distinct, none may nest inside another, and none may shadow a
+/// top-level endpoint. `mounts` is `(name, path)`, where the name identifies a
+/// registry instance.
 pub(crate) fn check(mounts: &[(&str, String)]) -> Result<(), String> {
     if let Some((id, _)) = mounts.iter().find(|(_, path)| path == "/") {
         if mounts.len() > 1 {
@@ -79,6 +81,23 @@ pub(crate) fn check(mounts: &[(&str, String)]) -> Result<(), String> {
                 "registries '{other}' and '{id}' are both mounted at '{path}'"
             ));
         }
+        // Several mounts of the same registry make nesting reachable (`/maven`
+        // and `/maven/plugins`), which has no unambiguous routing — refuse it
+        // rather than pick a winner.
+        if let Some((other, prior)) = mounts[..index]
+            .iter()
+            .find(|(_, prior)| nests(prior, path) || nests(path, prior))
+        {
+            return Err(format!(
+                "mount '{path}' ('{id}') and '{prior}' ('{other}') are nested; \
+                 mounts must not sit inside one another"
+            ));
+        }
     }
     Ok(())
+}
+
+/// Whether `inner` sits underneath `outer` (`/a` contains `/a/b`, not `/ab`).
+fn nests(outer: &str, inner: &str) -> bool {
+    outer != "/" && inner.starts_with(&format!("{outer}/"))
 }

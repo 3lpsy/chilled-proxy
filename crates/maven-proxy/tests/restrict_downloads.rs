@@ -48,6 +48,31 @@ async fn too_new_version_is_403() {
 }
 
 #[tokio::test]
+async fn absent_version_is_404_not_403() {
+    // A mount serves one repository, and a multi-repository build asks each of
+    // them for artifacts only another one carries. Upstream answering 404 is a
+    // definite "not here", not an undatable version: reporting it as gated
+    // sends the user hunting a cooldown problem that does not exist, and
+    // records a first-seen stamp for a version that is not there.
+    let proxy = TestProxy::builder()
+        .cooldown_days(7)
+        .restrict_downloads()
+        .start()
+        .await;
+    let path = proxy.file_path(GROUP, ARTIFACT, "4.0.0", "thing-4.0.0.jar");
+    proxy.mock_file(&path, JAR_BYTES, &[]).await;
+    proxy
+        .mock_pom_head_status(GROUP, ARTIFACT, "4.0.0", 404)
+        .await;
+
+    assert_eq!(proxy.get(&path).await.status(), 404);
+    // No sidecar was written for a version upstream does not have.
+    assert!(!proxy.sidecar_path(GROUP, ARTIFACT).exists());
+    // And the artifact itself was never fetched.
+    assert_eq!(proxy.upstream_hits(&path).await, 0);
+}
+
+#[tokio::test]
 async fn probe_failure_is_403_fail_closed() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
@@ -56,8 +81,10 @@ async fn probe_failure_is_403_fail_closed() {
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "3.0.0", "thing-3.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
+    // 500, not 404: an upstream that failed to answer, which leaves the version
+    // undatable and so gated.
     proxy
-        .mock_pom_head_status(GROUP, ARTIFACT, "3.0.0", 404)
+        .mock_pom_head_status(GROUP, ARTIFACT, "3.0.0", 500)
         .await;
 
     assert_eq!(proxy.get(&path).await.status(), 403);

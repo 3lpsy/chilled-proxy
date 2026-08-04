@@ -97,7 +97,18 @@ async fn home_reports_running_and_mounted_registries() {
         .iter()
         .map(|v| v.as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["crates", "npm", "pypi", "maven"]);
+    // Maven brings its built-in Gradle mounts along.
+    assert_eq!(
+        ids,
+        [
+            "crates",
+            "npm",
+            "pypi",
+            "maven",
+            "gradle-plugins",
+            "google-maven"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -178,7 +189,10 @@ async fn disabled_registry_is_not_mounted_or_listed() {
         .iter()
         .map(|v| v.as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(ids, ["crates", "pypi", "maven"]);
+    assert_eq!(
+        ids,
+        ["crates", "pypi", "maven", "gradle-plugins", "google-maven"]
+    );
 
     // With metrics enabled, a disabled registry is absent from the report too.
     let app = TestApp::start(&["--disable-npm", "--enable-metrics"]).await;
