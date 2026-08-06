@@ -8,8 +8,10 @@ use url::Url;
 
 fn config(proxy: &str, upstream: &str) -> Config {
     Config::new(
-        Url::parse("https://index.crates.io/").unwrap(),
-        Url::parse(upstream).unwrap(),
+        crate::config::Upstreams {
+            index: Url::parse("https://index.crates.io/").unwrap(),
+            download: Url::parse(upstream).unwrap(),
+        },
         RegistrySettings {
             cache_dir: PathBuf::from("/tmp/x"),
             cache_ttl: Duration::from_secs(3600),
@@ -39,14 +41,4 @@ fn config_json_trims_trailing_slashes() {
     let body = gen_config_json_file(&c);
     assert!(!body.contains("crates/\""));
     assert!(!body.contains("io/\""));
-}
-
-#[test]
-fn entry_validator_prefers_etag() {
-    let mut entry = IndexEntry::new("serde");
-    assert_eq!(entry_validator(&entry), "");
-    entry.set_last_modified("Sun, 06 Nov 1994 08:49:37 GMT");
-    assert_eq!(entry_validator(&entry), "Sun, 06 Nov 1994 08:49:37 GMT");
-    entry.set_etag("\"abc\"");
-    assert_eq!(entry_validator(&entry), "\"abc\"");
 }

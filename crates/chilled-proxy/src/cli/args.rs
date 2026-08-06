@@ -43,7 +43,13 @@ pub struct Cli {
     #[arg(short = 'L', long, env = "CHILLED_LISTEN", default_value = LISTEN_ADDRESS)]
     pub listen: String,
 
-    /// Proxy cache directory (each registry gets a subdirectory).
+    /// External base URL of this proxy (e.g. behind a reverse proxy). Each
+    /// mount's default proxy URL is this base plus the mount path; without it
+    /// the default derives from --listen. Per-mount URLs still win.
+    #[arg(long, env = "CHILLED_REVERSE_PROXY_URL")]
+    pub reverse_proxy_url: Option<Url>,
+
+    /// Proxy cache directory (each mount gets a subdirectory).
     #[arg(short = 'C', long, env = "CHILLED_CACHE_DIR", default_value = DEFAULT_CACHE_DIR)]
     pub cache_dir: String,
 

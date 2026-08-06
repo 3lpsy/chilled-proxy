@@ -1,6 +1,6 @@
 //! Bounded in-memory metadata cache (per-registry entry type).
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 use log::debug;
@@ -12,7 +12,7 @@ const METADATA_MAX_ENTRIES: usize = 8192;
 /// Bounded, concurrent cache of response metadata (etag / mtime) keyed by
 /// package name. Instance state, so a server is cleanly instantiable per test.
 pub struct MetadataCache<E: Clone> {
-    inner: RwLock<BTreeMap<String, E>>,
+    inner: RwLock<HashMap<String, E>>,
 }
 
 impl<E: Clone> Default for MetadataCache<E> {
@@ -25,7 +25,7 @@ impl<E: Clone> MetadataCache<E> {
     /// Creates an empty metadata cache.
     pub fn new() -> Self {
         MetadataCache {
-            inner: RwLock::new(BTreeMap::new()),
+            inner: RwLock::new(HashMap::new()),
         }
     }
 

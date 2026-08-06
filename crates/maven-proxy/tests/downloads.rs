@@ -5,6 +5,7 @@ mod common;
 
 use std::time::SystemTime;
 
+use common::StartProxy;
 use common::{metadata_xml, TestProxy, JAR_BYTES};
 
 const GROUP: &str = "com/example";
@@ -12,7 +13,7 @@ const ARTIFACT: &str = "thing";
 
 #[tokio::test]
 async fn artifact_proxies_then_caches_byte_exact() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
 
@@ -30,7 +31,7 @@ async fn artifact_proxies_then_caches_byte_exact() {
 
 #[tokio::test]
 async fn pom_is_served_as_xml() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.pom");
     proxy.mock_file(&path, b"<project/>", &[]).await;
 
@@ -40,7 +41,7 @@ async fn pom_is_served_as_xml() {
 
 #[tokio::test]
 async fn upstream_errors_are_forwarded() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let missing = proxy.file_path(GROUP, ARTIFACT, "9.9.9", "thing-9.9.9.jar");
     proxy.mock_file_status(&missing, 404).await;
     assert_eq!(proxy.get(&missing).await.status(), 404);
@@ -52,7 +53,7 @@ async fn upstream_errors_are_forwarded() {
 
 #[tokio::test]
 async fn dead_upstream_artifact_is_502() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.jar");
     assert_eq!(proxy.get(&path).await.status(), 502);
 }
@@ -62,7 +63,7 @@ async fn dead_upstream_serves_stale_filtered_metadata() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .dead_upstream()
-        .start()
+        .start_proxy()
         .await;
     // Seed the pristine metadata and a sidecar that gates 2.0.0.
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
@@ -82,13 +83,13 @@ async fn dead_upstream_serves_stale_filtered_metadata() {
 
 #[tokio::test]
 async fn dead_upstream_metadata_without_cache_is_502() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
     assert_eq!(proxy.get_metadata(GROUP, ARTIFACT).await.status(), 502);
 }
 
 #[tokio::test]
 async fn snapshot_version_dir_metadata_passes_through_ungated() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let path = format!("/{GROUP}/{ARTIFACT}/1.0-SNAPSHOT/maven-metadata.xml");
     let body = b"<metadata><versioning><snapshot/></versioning></metadata>";
     proxy.mock_file(&path, body, &[]).await;

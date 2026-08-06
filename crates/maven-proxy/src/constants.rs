@@ -22,7 +22,7 @@ pub(crate) const METADATA_FILE: &str = "maven-metadata.xml";
 pub(crate) const XML_CTYPE: &str = "text/xml";
 
 /// HTTP Content-Type for checksums and plain-text errors.
-pub(crate) const TEXT_CTYPE: &str = "text/plain";
+pub(crate) const TEXT_CTYPE: &str = "text/plain; charset=utf-8";
 
 /// HTTP Content-Type for jar files.
 pub(crate) const JAR_CTYPE: &str = "application/java-archive";

@@ -11,70 +11,22 @@ use crates_proxy::CratesProxy;
 
 use super::fixtures::index_rel;
 
-/// Configures and starts a [`TestProxy`] (crates registry mounted at `/crates`).
-pub struct TestProxyBuilder {
-    inner: TestServerBuilder,
+/// Starts the crates router for a configured [`TestServerBuilder`]. The
+/// generic knobs (`cooldown`, `override_package`, `dead_upstream`, ...) live on
+/// the builder itself.
+pub trait StartProxy {
+    async fn start_proxy(self) -> TestProxy;
 }
 
-impl TestProxyBuilder {
-    pub fn new() -> Self {
-        TestProxyBuilder {
-            inner: TestServerBuilder::new("/crates"),
-        }
-    }
-
-    pub fn cooldown(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cooldown(d);
-        self
-    }
-
-    pub fn cooldown_days(mut self, days: u64) -> Self {
-        self.inner = self.inner.cooldown_days(days);
-        self
-    }
-
-    pub fn cache_ttl(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cache_ttl(d);
-        self
-    }
-
-    pub fn override_crate(mut self, name: &str) -> Self {
-        self.inner = self.inner.override_package(name);
-        self
-    }
-
-    pub fn restrict_downloads(mut self) -> Self {
-        self.inner = self.inner.restrict_downloads();
-        self
-    }
-
-    pub fn proxy_url(mut self, url: &str) -> Self {
-        self.inner = self.inner.proxy_url(url);
-        self
-    }
-
-    pub fn dead_upstream(mut self) -> Self {
-        self.inner = self.inner.dead_upstream();
-        self
-    }
-
-    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_metadata_size(bytes);
-        self
-    }
-
-    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_artifact_size(bytes);
-        self
-    }
-
-    pub async fn start(self) -> TestProxy {
+impl StartProxy for TestServerBuilder {
+    async fn start_proxy(self) -> TestProxy {
         let server = self
-            .inner
             .start(|ctx| {
                 let config = crates_proxy::Config::new(
-                    ctx.upstream.clone(),
-                    ctx.upstream.clone(),
+                    crates_proxy::Upstreams {
+                        index: ctx.upstream.clone(),
+                        download: ctx.upstream.clone(),
+                    },
                     ctx.settings.clone(),
                 );
                 CratesProxy::new(config, reqwest::Client::new()).router()
@@ -90,9 +42,9 @@ pub struct TestProxy {
 }
 
 impl TestProxy {
-    /// Entry point: configure a proxy via the builder.
-    pub fn builder() -> TestProxyBuilder {
-        TestProxyBuilder::new()
+    /// Entry point: a builder for the crates registry mounted at `/crates`.
+    pub fn builder() -> TestServerBuilder {
+        TestServerBuilder::new("/crates")
     }
 
     pub fn mock_upstream(&self) -> &wiremock::MockServer {

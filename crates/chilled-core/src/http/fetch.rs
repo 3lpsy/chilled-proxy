@@ -34,7 +34,12 @@ pub async fn read_capped(
         }
     }
 
-    let mut data = Vec::new();
+    // Reserve from the declared length so a large body doesn't grow through
+    // a dozen reallocations — but cap the trust put in the header, so a lying
+    // upstream cannot make the proxy allocate the cap up front.
+    const MAX_PREALLOC: usize = 0x80_0000; // 8 MiB
+    let hint = response.content_length().map_or(0, |len| len as usize);
+    let mut data = Vec::with_capacity(hint.min(max).min(MAX_PREALLOC));
     while let Some(chunk) = response.chunk().await.map_err(FetchError::Http)? {
         if data.len().saturating_add(chunk.len()) > max {
             return Err(FetchError::TooLarge);

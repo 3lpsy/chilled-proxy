@@ -6,7 +6,7 @@ use std::path::Path;
 use axum::{body::Body, http::header, response::Response};
 use bytes::Bytes;
 use chilled_core::cache::MEMO_BUCKET_SECS;
-use chilled_core::etag::{filtered_etag, Marker};
+use chilled_core::etag::{cooldown_validators, Marker};
 use chilled_core::http::error_response;
 use log::error;
 
@@ -36,49 +36,39 @@ pub(crate) fn gen_config_json_file(config: &Config) -> String {
     format!(r#"{{"dl":"{dl}","api":"{api}"}}"#)
 }
 
-/// The source-content validator used as a memo key and for the weak ETag.
-pub(crate) fn entry_validator(entry: &IndexEntry) -> String {
-    entry
-        .etag()
-        .map(ToOwned::to_owned)
-        .or_else(|| entry.last_modified())
-        .unwrap_or_default()
-}
-
-/// Attaches cooldown-aware cache validators: a weak marked ETag (and no
-/// `Last-Modified`) for filtered entries, the upstream validators otherwise.
-pub(crate) fn with_index_validators(
-    mut builder: axum::http::response::Builder,
-    entry: &IndexEntry,
-    marker: Option<Marker>,
-) -> axum::http::response::Builder {
-    match marker {
-        Some(marker) => {
-            if let Some(etag) = entry.etag() {
-                builder = builder.header(header::ETAG, filtered_etag(etag, marker));
-            }
-        }
-        None => {
-            if let Some(etag) = entry.etag() {
-                builder = builder.header(header::ETAG, etag);
-            }
-            if let Some(last_modified) = entry.last_modified() {
-                builder = builder.header(header::LAST_MODIFIED, last_modified);
-            }
-        }
-    }
-    builder
-}
-
 /// Builds an index `304 Not Modified` response (no body).
 pub(crate) fn index_not_modified(entry: &IndexEntry, config: &Config, name: &str) -> Response {
-    with_index_validators(
+    cooldown_validators(
         Response::builder().status(304),
-        entry,
+        &entry.meta,
         config.serve_marker(name),
     )
     .body(Body::empty())
     .expect("valid 304 response")
+}
+
+/// Serves the memoized filtered index body for `entry` without touching the
+/// disk cache — `None` on a memo miss, or when the crate is unfiltered (the
+/// verbatim pristine body is needed then).
+pub(crate) fn index_memo_hit(entry: &IndexEntry, state: &AppState, name: &str) -> Option<Response> {
+    let config = &state.config;
+    let cutoff = config.cutoff_for(name)?;
+    let bucket = cutoff / MEMO_BUCKET_SECS;
+    let body = state.memo.get(name, &entry.meta.validator(), bucket)?;
+    Some(
+        cooldown_validators(
+            Response::builder()
+                .status(200)
+                .header(header::CONTENT_TYPE, INDEX_CTYPE),
+            &entry.meta,
+            Some(Marker {
+                window: config.settings.cooldown.as_secs(),
+                bucket,
+            }),
+        )
+        .body(Body::from(body))
+        .expect("valid index response"),
+    )
 }
 
 /// Builds an index `200 OK` response, age-gating (and memoizing) the body when
@@ -93,11 +83,11 @@ pub(crate) async fn index_ok(
 
     let Some(cutoff) = config.cutoff_for(name) else {
         // Unfiltered: serve verbatim with the upstream validators.
-        return with_index_validators(
+        return cooldown_validators(
             Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, INDEX_CTYPE),
-            entry,
+            &entry.meta,
             None,
         )
         .body(Body::from(data))
@@ -105,7 +95,7 @@ pub(crate) async fn index_ok(
     };
 
     let bucket = cutoff / MEMO_BUCKET_SECS;
-    let validator = entry_validator(entry);
+    let validator = entry.meta.validator();
 
     let body = if let Some(cached) = state.memo.get(name, &validator, bucket) {
         cached
@@ -126,11 +116,11 @@ pub(crate) async fn index_ok(
         filtered
     };
 
-    with_index_validators(
+    cooldown_validators(
         Response::builder()
             .status(200)
             .header(header::CONTENT_TYPE, INDEX_CTYPE),
-        entry,
+        &entry.meta,
         Some(Marker {
             window: config.settings.cooldown.as_secs(),
             bucket,

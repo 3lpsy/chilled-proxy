@@ -4,14 +4,15 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{ndjson, TestProxy, CRATE_BYTES, OLD, TOO_NEW};
 
 #[tokio::test]
 async fn override_crate_is_served_unfiltered() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
-        .override_crate("serde")
-        .start()
+        .override_package("serde")
+        .start_proxy()
         .await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
@@ -42,8 +43,8 @@ async fn override_match_is_case_insensitive() {
     // crate is still matched (and thus served unfiltered).
     let proxy = TestProxy::builder()
         .cooldown_days(7)
-        .override_crate("serde")
-        .start()
+        .override_package("serde")
+        .start_proxy()
         .await;
     // Upstream (like crates.io) serves at the lowercased path; the client makes
     // a mixed-case request, which the proxy normalizes when fetching/caching.
@@ -69,8 +70,8 @@ async fn override_exempts_download_under_restrict() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .override_crate("serde")
-        .start()
+        .override_package("serde")
+        .start_proxy()
         .await;
     proxy.mock_crate("serde", "2.0.0", CRATE_BYTES).await;
 

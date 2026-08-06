@@ -5,6 +5,7 @@ mod common;
 
 use std::time::SystemTime;
 
+use common::StartProxy;
 use common::{TestProxy, OLD, TARBALL_BYTES, TOO_NEW};
 
 fn tarball_path(name: &str, file: &str) -> String {
@@ -13,7 +14,7 @@ fn tarball_path(name: &str, file: &str) -> String {
 
 #[tokio::test]
 async fn tarball_proxies_then_caches_byte_exact() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_tarball("lodash", "lodash-1.0.0.tgz", TARBALL_BYTES)
         .await;
@@ -41,7 +42,7 @@ async fn tarball_proxies_then_caches_byte_exact() {
 
 #[tokio::test]
 async fn tarball_forwards_upstream_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_tarball_status("lodash", "lodash-9.9.9.tgz", 404)
         .await;
@@ -55,7 +56,7 @@ async fn restrict_blocks_too_new_allows_old() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     // Pristine packument on disk carries the publish times the gate reads.
     let body = proxy.packument_body("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
@@ -93,7 +94,7 @@ async fn restrict_is_fail_closed_without_cached_packument() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
 
     // Nothing cached: the gate tries to fetch the packument, upstream has no
@@ -112,7 +113,10 @@ async fn restrict_is_fail_closed_without_cached_packument() {
 
 #[tokio::test]
 async fn restrict_is_noop_when_cooldown_disabled() {
-    let proxy = TestProxy::builder().restrict_downloads().start().await; // cooldown = 0
+    let proxy = TestProxy::builder()
+        .restrict_downloads()
+        .start_proxy()
+        .await; // cooldown = 0
     proxy
         .mock_tarball("lodash", "lodash-2.0.0.tgz", TARBALL_BYTES)
         .await;
@@ -187,7 +191,7 @@ async fn restrict_gate_fetches_the_packument_on_demand() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
@@ -220,7 +224,7 @@ async fn restrict_gate_stays_closed_when_the_packument_is_unavailable() {
         .cooldown_days(7)
         .restrict_downloads()
         .dead_upstream()
-        .start()
+        .start_proxy()
         .await;
 
     // Nothing cached and upstream unreachable -> refuse, never serve.

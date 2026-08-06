@@ -5,11 +5,12 @@ mod common;
 
 use std::time::SystemTime;
 
+use common::StartProxy;
 use common::{simple_json, TestProxy, FILE_BYTES, OLD, SHA, TOO_NEW};
 
 #[tokio::test]
 async fn download_proxies_then_caches() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_file("foo-1.0.0.tar.gz", FILE_BYTES).await;
 
     let resp = proxy.download("foo", "foo-1.0.0.tar.gz").await;
@@ -39,7 +40,7 @@ async fn restrict_gates_against_the_pristine_index() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     // Pristine index on disk carries the upload-times the gate reads.
     let index = simple_json(
@@ -76,7 +77,7 @@ async fn restrict_without_cached_index_fails_closed() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     proxy.mock_file("foo-1.0.0.tar.gz", FILE_BYTES).await;
 
@@ -103,7 +104,7 @@ async fn restrict_gate_fetches_the_index_on_demand() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let index = simple_json(
         "foo",
@@ -131,7 +132,7 @@ async fn restrict_gate_fetches_the_index_on_demand() {
 async fn too_new_is_downloadable_without_restrict() {
     // Cooldown hides new files from the index, but a direct download still
     // works when --restrict-downloads is off.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy.mock_file("foo-2.0.0.tar.gz", FILE_BYTES).await;
 
     assert_eq!(
@@ -180,7 +181,14 @@ async fn oversized_content_length_is_507() {
         proxy_url: url::Url::parse("http://localhost:3080/pypi/").unwrap(),
     };
     let upstream_url = url::Url::parse(&format!("http://{upstream_addr}/")).unwrap();
-    let config = pypi_proxy::Config::new(upstream_url.clone(), upstream_url, settings);
+    let config = pypi_proxy::Config::new(
+        pypi_proxy::Upstreams {
+            simple: upstream_url.clone(),
+            files: upstream_url,
+        },
+        settings,
+        &[],
+    );
     let router = pypi_proxy::PypiProxy::new(config, reqwest::Client::new()).router();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -194,12 +202,15 @@ async fn oversized_content_length_is_507() {
     .unwrap();
     assert_eq!(resp.status(), 507);
     // Nothing partial was cached.
-    assert!(!tmp.path().join("files/foo/foo-1.0.0.tar.gz").exists());
+    assert!(!tmp
+        .path()
+        .join("files/foo/packages/aa/bb/cc/foo-1.0.0.tar.gz")
+        .exists());
 }
 
 #[tokio::test]
 async fn download_forwards_upstream_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_file_status("foo-9.9.9.tar.gz", 404).await;
 
     assert_eq!(
@@ -210,7 +221,7 @@ async fn download_forwards_upstream_404() {
 
 #[tokio::test]
 async fn download_transport_failure_is_502() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
 
     assert_eq!(
         proxy.download("foo", "foo-1.0.0.tar.gz").await.status(),
@@ -222,7 +233,7 @@ async fn download_transport_failure_is_502() {
 async fn pep658_metadata_sidecar_is_proxied() {
     // pip/uv fetch `<wheel>.metadata` when the index advertises core-metadata;
     // the files route must serve it rather than 404.
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_file(
             "foo-1.0.0-py3-none-any.whl.metadata",
@@ -245,7 +256,7 @@ async fn metadata_sidecar_ages_with_its_distribution() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let index = simple_json(
         "foo",
@@ -274,4 +285,32 @@ async fn metadata_sidecar_ages_with_its_distribution() {
             .status(),
         200
     );
+}
+
+#[tokio::test]
+async fn same_filename_at_different_paths_does_not_collide() {
+    // A multi-host index can carry same-named files at different paths
+    // (PyTorch: `whl/cpu/…` vs `whl/cu118/…`); the cache must keep both.
+    let proxy = TestProxy::builder().start_proxy().await;
+    proxy
+        .server
+        .mock_get("/whl/cpu/torch-2.0.0.whl", b"cpu-build", &[])
+        .await;
+    proxy
+        .server
+        .mock_get("/whl/cu118/torch-2.0.0.whl", b"cuda-build", &[])
+        .await;
+
+    let cpu = proxy.get("/files/torch/whl/cpu/torch-2.0.0.whl").await;
+    assert_eq!(cpu.bytes().await.unwrap().as_ref(), b"cpu-build");
+    let cuda = proxy.get("/files/torch/whl/cu118/torch-2.0.0.whl").await;
+    assert_eq!(cuda.bytes().await.unwrap().as_ref(), b"cuda-build");
+
+    // Both served again from cache, each from its own path.
+    let cpu = proxy.get("/files/torch/whl/cpu/torch-2.0.0.whl").await;
+    assert_eq!(cpu.bytes().await.unwrap().as_ref(), b"cpu-build");
+    let cuda = proxy.get("/files/torch/whl/cu118/torch-2.0.0.whl").await;
+    assert_eq!(cuda.bytes().await.unwrap().as_ref(), b"cuda-build");
+    assert_eq!(proxy.upstream_hits("/whl/cpu/torch-2.0.0.whl").await, 1);
+    assert_eq!(proxy.upstream_hits("/whl/cu118/torch-2.0.0.whl").await, 1);
 }

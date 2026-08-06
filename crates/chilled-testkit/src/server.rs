@@ -10,6 +10,34 @@ use tempfile::TempDir;
 use wiremock::matchers::{header, method, path as match_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Binds an ephemeral port, serves `app` on it, and polls `probe_path` until
+/// the server answers anything at all (status is irrelevant). Returns the base
+/// URL and the client used to probe it.
+pub async fn serve_app(app: axum::Router, probe_path: &str) -> (String, reqwest::Client) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(chilled_core::serve::serve_listener(listener, app));
+
+    let client = reqwest::Client::builder()
+        .build()
+        .expect("build test client");
+    let base_url = format!("http://{addr}");
+    for _ in 0..100 {
+        if client
+            .get(format!("{base_url}{probe_path}"))
+            .send()
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    (base_url, client)
+}
+
 /// A running proxy + its mock upstream + temp cache dir.
 pub struct TestServer {
     pub mock_upstream: MockServer,

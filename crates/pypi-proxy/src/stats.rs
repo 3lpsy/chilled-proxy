@@ -7,8 +7,14 @@ use chilled_core::registry::{CacheStats, CachedArtifact};
 
 use crate::valid;
 
+/// How deep the walk below a project directory may go — matches the segment
+/// cap on the files route, plus slack.
+const MAX_SCAN_DEPTH: usize = 10;
+
 /// Scans the file cache (`<cache_dir>/files/`) into sorted [`CacheStats`].
-/// Best-effort: unreadable or malformed entries are skipped, not fatal.
+/// Files are cached under their full upstream-relative path, so the walk
+/// recurses below each project directory. Best-effort: unreadable or
+/// malformed entries are skipped, not fatal.
 pub(crate) fn cache_stats(files_dir: &Path) -> CacheStats {
     let mut artifacts = Vec::new();
     let Ok(project_dirs) = std::fs::read_dir(files_dir) else {
@@ -23,30 +29,40 @@ pub(crate) fn cache_stats(files_dir: &Path) -> CacheStats {
         if !valid::is_valid_name(&name) || valid::normalize(&name) != name {
             continue;
         }
-
-        let Ok(files) = std::fs::read_dir(project_dir.path()) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let file_name = file.file_name().to_string_lossy().into_owned();
-            if !valid::is_valid_filename(&file_name) {
-                continue;
-            }
-            let cached_at = file
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_secs());
-            artifacts.push(CachedArtifact {
-                name: name.clone(),
-                version: file_name,
-                cached_at,
-            });
-        }
+        walk(&project_dir.path(), &name, MAX_SCAN_DEPTH, &mut artifacts);
     }
     artifacts.sort();
     CacheStats { artifacts }
+}
+
+/// Collects valid distribution files below `dir` into `artifacts`.
+fn walk(dir: &Path, project: &str, depth: usize, artifacts: &mut Vec<CachedArtifact>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            if depth > 0 {
+                walk(&entry.path(), project, depth - 1, artifacts);
+            }
+            continue;
+        }
+        if !valid::is_valid_filename(&file_name) {
+            continue;
+        }
+        let cached_at = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        artifacts.push(CachedArtifact {
+            name: project.to_owned(),
+            version: file_name,
+            cached_at,
+        });
+    }
 }
 
 #[cfg(test)]
@@ -58,8 +74,12 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let dir = tmp.path();
 
-        std::fs::create_dir_all(dir.join("requests")).unwrap();
-        std::fs::write(dir.join("requests/requests-2.0.0.tar.gz"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("requests/packages/aa/bb")).unwrap();
+        std::fs::write(
+            dir.join("requests/packages/aa/bb/requests-2.0.0.tar.gz"),
+            b"x",
+        )
+        .unwrap();
         std::fs::write(dir.join("requests/requests-2.0.0-py3-none-any.whl"), b"x").unwrap();
         std::fs::write(dir.join("requests/garbage.txt"), b"x").unwrap();
         // Non-normalized project dir is skipped entirely.

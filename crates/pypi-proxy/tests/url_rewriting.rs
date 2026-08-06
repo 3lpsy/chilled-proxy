@@ -3,13 +3,14 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{simple_json, TestProxy, OLD, SHA, SIMPLE_CTYPE};
 
 const JSON_ACCEPT: &[(&str, &str)] = &[("accept", SIMPLE_CTYPE)];
 
 #[tokio::test]
 async fn json_file_urls_point_at_the_proxy() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json(
         "foo",
         &[
@@ -37,7 +38,7 @@ async fn json_file_urls_point_at_the_proxy() {
 
 #[tokio::test]
 async fn html_anchors_carry_fragment_and_requires_python() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
 
@@ -52,7 +53,7 @@ async fn html_anchors_carry_fragment_and_requires_python() {
 
 #[tokio::test]
 async fn hashes_object_is_untouched_in_json() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
 

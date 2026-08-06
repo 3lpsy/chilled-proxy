@@ -3,11 +3,12 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{TestProxy, OLD, TOO_NEW};
 
 #[tokio::test]
 async fn version_doc_returns_the_version_object() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", OLD)])
         .await;
@@ -26,7 +27,7 @@ async fn version_doc_returns_the_version_object() {
 
 #[tokio::test]
 async fn filtered_version_doc_is_404() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -39,7 +40,7 @@ async fn filtered_version_doc_is_404() {
 
 #[tokio::test]
 async fn absent_version_doc_is_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
     let resp = proxy.get_version("lodash", "9.9.9").await;
@@ -49,7 +50,7 @@ async fn absent_version_doc_is_404() {
 #[tokio::test]
 async fn dist_tag_resolves_to_a_version_doc() {
     // npm resolves `GET /pkg/latest` through dist-tags, not just versions.
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", OLD)])
         .await;
@@ -64,7 +65,7 @@ async fn dist_tag_resolves_to_a_version_doc() {
 async fn dist_tag_follows_the_filtered_view() {
     // Under cooldown `latest` was repointed, so the tag resolves to the newest
     // version the proxy actually serves.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -75,7 +76,7 @@ async fn dist_tag_follows_the_filtered_view() {
 
 #[tokio::test]
 async fn unknown_dist_tag_is_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
     assert_eq!(proxy.get("/lodash/nope").await.status(), 404);

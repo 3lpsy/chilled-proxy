@@ -4,6 +4,7 @@
 mod common;
 
 use chilled_testkit::{marker_prefix, shift_marker_bucket};
+use common::StartProxy;
 use common::{ndjson, rfc3339_from_now, TestProxy, OLD, TOO_NEW};
 
 const WEEK_SECS: u64 = 7 * 86_400;
@@ -16,7 +17,7 @@ fn week_prefix() -> String {
 
 #[tokio::test]
 async fn filtering_hides_too_new_version() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
         .mock_index(
@@ -46,7 +47,7 @@ async fn filtering_hides_too_new_version() {
 
 #[tokio::test]
 async fn boundary_keeps_at_cutoff_drops_newer() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     // `kept` sits an hour older than the cutoff, `dropped` an hour newer — a
     // comfortable margin around `now - 7d` that the request can't cross.
     let kept = rfc3339_from_now(-(WEEK_SECS as i64) - 3600);
@@ -68,7 +69,7 @@ async fn boundary_keeps_at_cutoff_drops_newer() {
 
 #[tokio::test]
 async fn cooldown_disabled_serves_verbatim() {
-    let proxy = TestProxy::builder().start().await; // cooldown = 0
+    let proxy = TestProxy::builder().start_proxy().await; // cooldown = 0
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
         .mock_index(
@@ -91,7 +92,7 @@ async fn cooldown_disabled_serves_verbatim() {
 
 #[tokio::test]
 async fn marked_etag_revalidation_yields_304() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
         .mock_index(
@@ -129,7 +130,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
     // length. A client holding a copy filtered at an earlier bucket has to be
     // re-served, or versions that aged past the cooldown would stay invisible
     // to it for as long as upstream's own validator is unchanged.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
         .mock_index(
@@ -153,7 +154,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
 
 #[tokio::test]
 async fn unmarked_etag_under_cooldown_is_not_304() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
         .mock_index(
@@ -178,7 +179,7 @@ async fn unmarked_etag_under_cooldown_is_not_304() {
 
 #[tokio::test]
 async fn non_utf8_body_passes_through_unfiltered() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let raw = vec![0xff_u8, 0xfe, b'\n', 0x80, 0x00];
     proxy
         .mock_index_bytes("serde", raw.clone(), "\"etagX\"")

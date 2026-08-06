@@ -25,7 +25,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use chilled_core::cache::{FilteredMemo, MetadataCache};
 use chilled_core::config::RegistrySettings;
 use chilled_core::etag::Marker;
 use chilled_core::registry::{CacheStats, RegistryProxy};
@@ -39,6 +38,16 @@ pub const PYPI_SIMPLE_URL: &str = "https://pypi.org/simple/";
 
 /// Default upstream PyPI file-hosting URL.
 pub const PYPI_FILES_URL: &str = "https://files.pythonhosted.org/";
+
+/// Upstream endpoints for a PyPI-style registry. Named fields, because both
+/// are URLs and a silent swap would be invisible to the type system.
+#[derive(Debug, Clone)]
+pub struct Upstreams {
+    /// Simple-index URL.
+    pub simple: Url,
+    /// Default file-hosting URL.
+    pub files: Url,
+}
 
 /// PyPI proxy configuration (immutable after startup).
 #[derive(Debug, Clone)]
@@ -66,21 +75,19 @@ pub struct Config {
 
 impl Config {
     /// Builds a configuration, deriving the `simple`/`files` cache
-    /// subdirectories from the settings' cache dir.
+    /// subdirectories from the settings' cache dir. `extra_file_hosts` names
+    /// additional hosts this mount's index may serve files from, plainly
+    /// declared by the operator.
     #[must_use]
-    pub fn new(upstream_url: Url, files_url: Url, settings: RegistrySettings) -> Self {
-        Config::with_file_hosts(upstream_url, files_url, settings, &[])
-    }
-
-    /// As [`Config::new`], plus extra hosts this mount's index is allowed to
-    /// serve files from, plainly declared by the operator.
-    #[must_use]
-    pub fn with_file_hosts(
-        upstream_url: Url,
-        files_url: Url,
+    pub fn new(
+        upstreams: Upstreams,
         mut settings: RegistrySettings,
         extra_file_hosts: &[String],
     ) -> Self {
+        let Upstreams {
+            simple: upstream_url,
+            files: files_url,
+        } = upstreams;
         let simple_dir = settings.cache_dir.join("simple");
         let files_dir = settings.cache_dir.join("files");
         // PEP 503-normalize override entries so `Foo.Bar` matches `foo-bar`.
@@ -143,21 +150,12 @@ impl PypiProxy {
     /// Builds the proxy from its config and a shared HTTP client.
     pub fn new(config: Config, client: reqwest::Client) -> Self {
         PypiProxy {
-            state: AppState {
-                config: Arc::new(config),
-                client,
-                memo: Arc::new(FilteredMemo::new()),
-                metadata: Arc::new(MetadataCache::new()),
-            },
+            state: AppState::new(config, client),
         }
     }
 }
 
 impl RegistryProxy for PypiProxy {
-    fn id(&self) -> &'static str {
-        "pypi"
-    }
-
     fn router(&self) -> Router {
         // A single fallback classifies the raw path itself (decode-once).
         Router::new()

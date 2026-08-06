@@ -9,62 +9,16 @@ use chilled_core::registry::RegistryProxy;
 use chilled_testkit::{TestServer, TestServerBuilder};
 use maven_proxy::MavenProxy;
 
-/// Configures and starts a [`TestProxy`] (Maven registry mounted at `/maven`).
-pub struct TestProxyBuilder {
-    inner: TestServerBuilder,
+/// Starts the Maven router for a configured [`TestServerBuilder`]. The generic
+/// knobs (`cooldown`, `override_package` — pass a `group:artifact` key —
+/// `dead_upstream`, ...) live on the builder itself.
+pub trait StartProxy {
+    async fn start_proxy(self) -> TestProxy;
 }
 
-impl TestProxyBuilder {
-    pub fn new() -> Self {
-        TestProxyBuilder {
-            inner: TestServerBuilder::new("/maven"),
-        }
-    }
-
-    pub fn cooldown(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cooldown(d);
-        self
-    }
-
-    pub fn cooldown_days(mut self, days: u64) -> Self {
-        self.inner = self.inner.cooldown_days(days);
-        self
-    }
-
-    pub fn cache_ttl(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cache_ttl(d);
-        self
-    }
-
-    /// Adds a `group:artifact` key to the cooldown-override set.
-    pub fn override_artifact(mut self, key: &str) -> Self {
-        self.inner = self.inner.override_package(key);
-        self
-    }
-
-    pub fn restrict_downloads(mut self) -> Self {
-        self.inner = self.inner.restrict_downloads();
-        self
-    }
-
-    pub fn dead_upstream(mut self) -> Self {
-        self.inner = self.inner.dead_upstream();
-        self
-    }
-
-    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_metadata_size(bytes);
-        self
-    }
-
-    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_artifact_size(bytes);
-        self
-    }
-
-    pub async fn start(self) -> TestProxy {
+impl StartProxy for TestServerBuilder {
+    async fn start_proxy(self) -> TestProxy {
         let server = self
-            .inner
             .start(|ctx| {
                 let config = maven_proxy::Config::new(ctx.upstream.clone(), ctx.settings.clone());
                 MavenProxy::new(config, reqwest::Client::new()).router()
@@ -82,9 +36,9 @@ pub struct TestProxy {
 }
 
 impl TestProxy {
-    /// Entry point: configure a proxy via the builder.
-    pub fn builder() -> TestProxyBuilder {
-        TestProxyBuilder::new()
+    /// Entry point: a builder for the Maven repository mounted at `/maven`.
+    pub fn builder() -> TestServerBuilder {
+        TestServerBuilder::new("/maven")
     }
 
     // Upstream path helpers.
@@ -129,18 +83,6 @@ impl TestProxy {
     pub async fn mock_metadata_304(&self, group: &str, artifact: &str, etag: &str) {
         self.server
             .mock_get_304(&self.metadata_path(group, artifact), etag)
-            .await;
-    }
-
-    /// Mounts an arbitrary upstream status for the metadata path.
-    pub async fn mock_metadata_status(&self, group: &str, artifact: &str, status: u16) {
-        self.server
-            .mock_get_status(
-                &self.metadata_path(group, artifact),
-                status,
-                b"upstream says no",
-                &[],
-            )
             .await;
     }
 
@@ -216,12 +158,6 @@ impl TestProxy {
     }
 
     // On-disk cache helpers.
-
-    /// Absolute cache path of the pristine metadata file.
-    pub fn metadata_cache_path(&self, group: &str, artifact: &str) -> PathBuf {
-        self.server
-            .cache_path(&format!("repo/{group}/{artifact}/maven-metadata.xml"))
-    }
 
     /// Absolute cache path of the version-age sidecar file.
     pub fn sidecar_path(&self, group: &str, artifact: &str) -> PathBuf {

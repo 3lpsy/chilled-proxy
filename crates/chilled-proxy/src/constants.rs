@@ -1,7 +1,6 @@
 //! chilled-proxy compile-time constants.
 
-/// Every registry this binary can serve, in mount order.
-pub(crate) const REGISTRY_IDS: [&str; 4] = ["crates", "npm", "pypi", "maven"];
+use crate::kind::RegistryKind;
 
 /// Extra mounts served by default, as `(registry, name, path, upstream)`.
 ///
@@ -9,15 +8,15 @@ pub(crate) const REGISTRY_IDS: [&str; 4] = ["crates", "npm", "pypi", "maven"];
 /// only Central leaves plugins and AndroidX ungated — the two easiest holes to
 /// miss — so the other two are mounted out of the box. A `--<registry>-mount`
 /// of the same name replaces the entry; `--no-default-mounts` drops them all.
-pub(crate) const DEFAULT_MOUNTS: &[(&str, &str, &str, &str)] = &[
+pub(crate) const DEFAULT_MOUNTS: &[(RegistryKind, &str, &str, &str)] = &[
     (
-        "maven",
+        RegistryKind::Maven,
         "gradle-plugins",
         "/gradle-plugins",
         "https://plugins.gradle.org/m2/",
     ),
     (
-        "maven",
+        RegistryKind::Maven,
         "google-maven",
         "/google-maven",
         "https://dl.google.com/dl/android/maven2/",

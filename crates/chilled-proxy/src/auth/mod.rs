@@ -25,6 +25,43 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 pub(crate) const ENV_SUFFIXES: &[&str] =
     &["_BASIC_AUTH_USERNAME", "_BASIC_AUTH_PASSWORD", "_HEADERS"];
 
+/// A source of environment variables, injectable so auth resolution — values
+/// *and* the typo-detecting key scan — is testable without mutating the
+/// process environment (which is global; tests run in parallel).
+pub(crate) trait EnvSource {
+    /// The value of `key`. Empty values read as unset, so a cleared variable
+    /// does not become an empty credential.
+    fn get(&self, key: &str) -> Option<String>;
+    /// Every variable name in the environment.
+    fn keys(&self) -> Vec<String>;
+}
+
+/// The process environment.
+pub(crate) struct ProcessEnv;
+
+impl EnvSource for ProcessEnv {
+    fn get(&self, key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.is_empty())
+    }
+
+    fn keys(&self) -> Vec<String> {
+        std::env::vars().map(|(k, _)| k).collect()
+    }
+}
+
+#[cfg(test)]
+impl EnvSource for std::collections::HashMap<String, String> {
+    fn get(&self, key: &str) -> Option<String> {
+        std::collections::HashMap::get(self, key)
+            .cloned()
+            .filter(|v| !v.is_empty())
+    }
+
+    fn keys(&self) -> Vec<String> {
+        self.keys().cloned().collect()
+    }
+}
+
 /// Headers attached to every upstream request a mount makes.
 #[derive(Debug, Clone, Default)]
 pub struct UpstreamAuth {
@@ -76,7 +113,7 @@ pub(crate) fn resolve(
     name: &str,
     cli_basic: Option<&(String, String)>,
     cli_headers: &[(String, String)],
-    env: &dyn Fn(&str) -> Option<String>,
+    env: &dyn EnvSource,
 ) -> Result<UpstreamAuth, String> {
     let token = env_token(name);
     let err = |msg: String| format!("mount '{name}': {msg}");
@@ -85,7 +122,7 @@ pub(crate) fn resolve(
 
     // Env headers first, so a --upstream-header for the same header replaces
     // rather than duplicates.
-    if let Some(list) = env(&format!("CHILLED_{token}_HEADERS")) {
+    if let Some(list) = env.get(&format!("CHILLED_{token}_HEADERS")) {
         for (header, value) in parse_header_list(&list).map_err(err)? {
             insert(&mut headers, &header, &value).map_err(err)?;
         }
@@ -96,8 +133,8 @@ pub(crate) fn resolve(
     let explicit_authorization = headers.contains_key(AUTHORIZATION);
 
     // Credentials: the CLI pair, else both env vars together.
-    let env_user = env(&format!("CHILLED_{token}_BASIC_AUTH_USERNAME"));
-    let env_pass = env(&format!("CHILLED_{token}_BASIC_AUTH_PASSWORD"));
+    let env_user = env.get(&format!("CHILLED_{token}_BASIC_AUTH_USERNAME"));
+    let env_pass = env.get(&format!("CHILLED_{token}_BASIC_AUTH_PASSWORD"));
     let credentials = match (cli_basic, env_user, env_pass) {
         (Some(pair), ..) => Some(pair.clone()),
         (None, Some(user), Some(password)) => Some((user, password)),

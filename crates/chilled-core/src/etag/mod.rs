@@ -13,6 +13,10 @@
 #[cfg(test)]
 mod tests;
 
+use axum::http::header;
+
+use crate::cache::CacheEntry;
+
 /// A parsed cooldown marker: the window length and the cutoff bucket the body
 /// was filtered at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +109,31 @@ pub fn etag_marker(client_value: &str) -> Option<Marker> {
         return Some(marker);
     }
     split_marker(inner).1
+}
+
+/// Attaches cooldown-aware cache validators: a weak marked ETag (and no
+/// `Last-Modified`) for filtered bodies, the upstream validators otherwise.
+pub fn cooldown_validators(
+    mut builder: axum::http::response::Builder,
+    entry: &CacheEntry,
+    marker: Option<Marker>,
+) -> axum::http::response::Builder {
+    match marker {
+        Some(marker) => {
+            if let Some(etag) = entry.etag() {
+                builder = builder.header(header::ETAG, filtered_etag(etag, marker));
+            }
+        }
+        None => {
+            if let Some(etag) = entry.etag() {
+                builder = builder.header(header::ETAG, etag);
+            }
+            if let Some(last_modified) = entry.last_modified() {
+                builder = builder.header(header::LAST_MODIFIED, last_modified);
+            }
+        }
+    }
+    builder
 }
 
 /// Extracts the representation tag (e.g. `j`/`h`) from a marked client ETag.

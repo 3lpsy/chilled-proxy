@@ -4,11 +4,12 @@
 
 mod common;
 
+use common::StartProxy;
 use common::TestProxy;
 
 #[tokio::test]
 async fn malformed_index_paths_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     // Too many segments, and a traversal segment.
     for path in ["/index/a/b/c/d", "/index/1/.."] {
@@ -19,7 +20,7 @@ async fn malformed_index_paths_are_rejected() {
 
 #[tokio::test]
 async fn malformed_download_paths_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     // Missing the `/download` suffix; wrong segment count.
     for path in [
@@ -34,7 +35,7 @@ async fn malformed_download_paths_are_rejected() {
 
 #[tokio::test]
 async fn unknown_route_is_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     assert_eq!(proxy.get("/nope").await.status(), 404);
     assert_eq!(proxy.get("/api/v2/whatever").await.status(), 404);
 }

@@ -7,6 +7,7 @@ mod common;
 use std::fs;
 use std::time::Duration;
 
+use common::StartProxy;
 use common::{TestProxy, ETAG, OLD};
 
 /// The `.rw` marker for the default upstream ETag (rewritten, unfiltered).
@@ -14,7 +15,7 @@ const RW_MARKER: &str = "W/\"etag123.rw\"";
 
 #[tokio::test]
 async fn not_cached_fetches_upstream_and_writes_disk() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
     let resp = proxy.get_packument("lodash", &[]).await;
@@ -32,7 +33,7 @@ async fn not_cached_fetches_upstream_and_writes_disk() {
 async fn cached_within_ttl_serves_without_upstream() {
     let proxy = TestProxy::builder()
         .cache_ttl(Duration::from_secs(3600))
-        .start()
+        .start_proxy()
         .await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
@@ -48,7 +49,10 @@ async fn cached_within_ttl_serves_without_upstream() {
 
 #[tokio::test]
 async fn ttl_zero_revalidates_and_serves_from_disk_on_304() {
-    let proxy = TestProxy::builder().cache_ttl(Duration::ZERO).start().await;
+    let proxy = TestProxy::builder()
+        .cache_ttl(Duration::ZERO)
+        .start_proxy()
+        .await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
     proxy.mock_packument_304("lodash", ETAG).await;
 
@@ -65,7 +69,7 @@ async fn ttl_zero_revalidates_and_serves_from_disk_on_304() {
 
 #[tokio::test]
 async fn client_revalidation_with_marked_etag_gets_304() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
     let first = proxy.get_packument("lodash", &[]).await;
@@ -86,7 +90,7 @@ async fn client_revalidation_with_marked_etag_gets_304() {
 #[tokio::test]
 async fn tarball_urls_rewritten_with_cooldown_off_and_on() {
     for days in [0, 7] {
-        let proxy = TestProxy::builder().cooldown_days(days).start().await;
+        let proxy = TestProxy::builder().cooldown_days(days).start_proxy().await;
         proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
         let served: serde_json::Value = proxy
@@ -105,7 +109,7 @@ async fn tarball_urls_rewritten_with_cooldown_off_and_on() {
 
 #[tokio::test]
 async fn full_packument_requested_even_for_corgi_clients() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_packument("lodash", &[("1.0.0", OLD)]).await;
 
     // npm sends the abbreviated "corgi" Accept; the proxy must still request

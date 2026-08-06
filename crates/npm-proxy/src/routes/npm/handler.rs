@@ -34,5 +34,3 @@ pub(crate) async fn handle_npm(
         }
     }
 }
-
-// --- Packuments ---

@@ -117,7 +117,7 @@ fn rejects_oversized_paths() {
 fn content_types_by_extension() {
     assert_eq!(ctype_for("a-1.0.jar"), "application/java-archive");
     assert_eq!(ctype_for("a-1.0.pom"), "text/xml");
-    assert_eq!(ctype_for("a-1.0.jar.sha1"), "text/plain");
+    assert_eq!(ctype_for("a-1.0.jar.sha1"), "text/plain; charset=utf-8");
     assert_eq!(ctype_for("a-1.0.war"), "application/octet-stream");
     assert_eq!(ctype_for("a-1.0.jar.asc"), "application/octet-stream");
 }

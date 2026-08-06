@@ -23,10 +23,8 @@ pub(crate) mod valid;
 pub use constants::{DEFAULT_MAX_ARTIFACT_SIZE, DEFAULT_MAX_METADATA_SIZE};
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::Router;
-use chilled_core::cache::{FilteredMemo, MetadataCache};
 use chilled_core::config::RegistrySettings;
 use chilled_core::etag::Marker;
 use chilled_core::registry::{CacheStats, RegistryProxy};
@@ -84,21 +82,12 @@ impl MavenProxy {
     /// Builds the proxy from its config and a shared HTTP client.
     pub fn new(config: Config, client: reqwest::Client) -> Self {
         MavenProxy {
-            state: AppState {
-                config: Arc::new(config),
-                client,
-                memo: Arc::new(FilteredMemo::new()),
-                metadata: Arc::new(MetadataCache::new()),
-            },
+            state: AppState::new(config, client),
         }
     }
 }
 
 impl RegistryProxy for MavenProxy {
-    fn id(&self) -> &'static str {
-        "maven"
-    }
-
     fn router(&self) -> Router {
         Router::new()
             .fallback(handle_maven)

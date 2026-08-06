@@ -26,11 +26,8 @@ mod tests {
     use axum::Router;
     use chilled_core::registry::{CacheStats, RegistryProxy};
 
-    struct Fake(&'static str);
+    struct Fake;
     impl RegistryProxy for Fake {
-        fn id(&self) -> &'static str {
-            self.0
-        }
         fn router(&self) -> Router {
             Router::new()
         }
@@ -43,7 +40,7 @@ mod tests {
     fn mounted(name: &str) -> super::super::MountedRegistry {
         super::super::MountedRegistry {
             name: name.to_owned(),
-            proxy: std::sync::Arc::new(Fake("npm")),
+            proxy: std::sync::Arc::new(Fake),
         }
     }
 

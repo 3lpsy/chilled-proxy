@@ -16,6 +16,11 @@ pub enum ListenAddress {
 /// Exposed for embedding/tests: bind an ephemeral port, read `local_addr`, then
 /// drive the router over real HTTP.
 pub async fn serve_listener(listener: tokio::net::TcpListener, app: Router) {
+    use axum::serve::ListenerExt;
+    // Small responses (304s, index entries) should not sit in Nagle's buffer.
+    let listener = listener.tap_io(|stream| {
+        let _ = stream.set_nodelay(true);
+    });
     axum::serve(listener, app.into_make_service())
         .await
         .expect("HTTP server error");
@@ -29,9 +34,7 @@ pub async fn serve(listen_addr: ListenAddress, app: Router) {
             let listener = tokio::net::TcpListener::bind(&addr)
                 .await
                 .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
-            axum::serve(listener, app.into_make_service())
-                .await
-                .expect("HTTP server error");
+            serve_listener(listener, app).await;
         }
         ListenAddress::UnixPath(path) => {
             info!("proxy: starting HTTP server at Unix socket {path}");

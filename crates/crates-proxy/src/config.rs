@@ -6,6 +6,16 @@ use chilled_core::config::RegistrySettings;
 use chilled_core::etag::Marker;
 use url::Url;
 
+/// Upstream endpoints for a crates.io-style registry. Named fields, because
+/// both are URLs and a silent swap would be invisible to the type system.
+#[derive(Debug, Clone)]
+pub struct Upstreams {
+    /// Sparse-index URL.
+    pub index: Url,
+    /// Crate download URL (the registry API root).
+    pub download: Url,
+}
+
 /// crates.io proxy configuration (immutable after startup).
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -25,12 +35,12 @@ impl Config {
     /// Builds a configuration, deriving the `index`/`crates` cache
     /// subdirectories from the settings' cache dir.
     #[must_use]
-    pub fn new(index_url: Url, upstream_url: Url, settings: RegistrySettings) -> Self {
+    pub fn new(upstreams: Upstreams, settings: RegistrySettings) -> Self {
         let index_dir = settings.cache_dir.join("index");
         let crates_dir = settings.cache_dir.join("crates");
         Config {
-            index_url,
-            upstream_url,
+            index_url: upstreams.index,
+            upstream_url: upstreams.download,
             settings,
             index_dir,
             crates_dir,
@@ -58,8 +68,10 @@ mod tests {
 
     fn config(cooldown_secs: u64, overrides: &[&str]) -> Config {
         Config::new(
-            Url::parse("https://index.crates.io/").unwrap(),
-            Url::parse("https://crates.io/").unwrap(),
+            Upstreams {
+                index: Url::parse("https://index.crates.io/").unwrap(),
+                download: Url::parse("https://crates.io/").unwrap(),
+            },
             RegistrySettings {
                 cache_dir: PathBuf::from("/var/cache/chilled/crates"),
                 cache_ttl: Duration::from_secs(3600),

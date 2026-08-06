@@ -11,80 +11,31 @@ use pypi_proxy::PypiProxy;
 
 use super::fixtures::SIMPLE_CTYPE;
 
-/// Configures and starts a [`TestProxy`] (PyPI registry mounted at `/pypi`).
-pub struct TestProxyBuilder {
-    inner: TestServerBuilder,
-    file_hosts: Vec<String>,
+/// Starts the PyPI router for a configured [`TestServerBuilder`]. The generic
+/// knobs (`cooldown`, `override_package`, `dead_upstream`, ...) live on the
+/// builder itself.
+pub trait StartProxy {
+    async fn start_proxy(self) -> TestProxy;
+    /// As [`Self::start_proxy`], with extra hosts the mount may fetch
+    /// distribution files from.
+    async fn start_proxy_with_hosts(self, hosts: &[&str]) -> TestProxy;
 }
 
-impl TestProxyBuilder {
-    pub fn new() -> Self {
-        TestProxyBuilder {
-            inner: TestServerBuilder::new("/pypi"),
-            file_hosts: Vec::new(),
-        }
+impl StartProxy for TestServerBuilder {
+    async fn start_proxy(self) -> TestProxy {
+        self.start_proxy_with_hosts(&[]).await
     }
 
-    pub fn cooldown(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cooldown(d);
-        self
-    }
-
-    pub fn cooldown_days(mut self, days: u64) -> Self {
-        self.inner = self.inner.cooldown_days(days);
-        self
-    }
-
-    pub fn cache_ttl(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cache_ttl(d);
-        self
-    }
-
-    pub fn override_package(mut self, name: &str) -> Self {
-        self.inner = self.inner.override_package(name);
-        self
-    }
-
-    pub fn restrict_downloads(mut self) -> Self {
-        self.inner = self.inner.restrict_downloads();
-        self
-    }
-
-    pub fn proxy_url(mut self, url: &str) -> Self {
-        self.inner = self.inner.proxy_url(url);
-        self
-    }
-
-    pub fn dead_upstream(mut self) -> Self {
-        self.inner = self.inner.dead_upstream();
-        self
-    }
-
-    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_metadata_size(bytes);
-        self
-    }
-
-    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_artifact_size(bytes);
-        self
-    }
-
-    /// Extra hosts the mount may fetch distribution files from.
-    pub fn file_hosts(mut self, hosts: &[&str]) -> Self {
-        self.file_hosts = hosts.iter().map(|h| (*h).to_string()).collect();
-        self
-    }
-
-    pub async fn start(self) -> TestProxy {
-        let file_hosts = self.file_hosts.clone();
+    async fn start_proxy_with_hosts(self, hosts: &[&str]) -> TestProxy {
+        let file_hosts: Vec<String> = hosts.iter().map(|h| (*h).to_string()).collect();
         let server = self
-            .inner
             .start(move |ctx| {
                 // Both the simple index and the files host point at the mock.
-                let config = pypi_proxy::Config::with_file_hosts(
-                    ctx.upstream.clone(),
-                    ctx.upstream.clone(),
+                let config = pypi_proxy::Config::new(
+                    pypi_proxy::Upstreams {
+                        simple: ctx.upstream.clone(),
+                        files: ctx.upstream.clone(),
+                    },
                     ctx.settings.clone(),
                     &file_hosts,
                 );
@@ -107,9 +58,9 @@ pub struct TestProxy {
 }
 
 impl TestProxy {
-    /// Entry point: configure a proxy via the builder.
-    pub fn builder() -> TestProxyBuilder {
-        TestProxyBuilder::new()
+    /// Entry point: a builder for the PyPI registry mounted at `/pypi`.
+    pub fn builder() -> TestServerBuilder {
+        TestServerBuilder::new("/pypi")
     }
 
     // Mock upstream mounting.
@@ -227,12 +178,14 @@ impl TestProxy {
             .join(format!("{name}.json"))
     }
 
-    /// Absolute path of the cached file for `project`/`filename`.
+    /// Absolute path of the cached file for `project`/`filename`, under the
+    /// canonical `packages/aa/bb/cc/` upstream path the harness mocks.
     pub fn file_cache_path(&self, project: &str, filename: &str) -> PathBuf {
         self.server
             .cache_dir
             .join("files")
             .join(project)
+            .join("packages/aa/bb/cc")
             .join(filename)
     }
 

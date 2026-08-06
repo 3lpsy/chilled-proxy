@@ -8,5 +8,6 @@ pub mod etag;
 pub mod http;
 pub mod registry;
 pub mod serve;
+pub mod state;
 pub mod time;
 pub mod valid;

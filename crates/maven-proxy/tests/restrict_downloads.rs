@@ -3,6 +3,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{TestProxy, JAR_BYTES, OLD, TOO_NEW};
 
 const GROUP: &str = "com/example";
@@ -13,7 +14,7 @@ async fn old_version_is_served() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -36,7 +37,7 @@ async fn too_new_version_is_403() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "2.0.0", "thing-2.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -57,7 +58,7 @@ async fn absent_version_is_404_not_403() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "4.0.0", "thing-4.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -77,7 +78,7 @@ async fn probe_failure_is_403_fail_closed() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "3.0.0", "thing-3.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -106,7 +107,7 @@ async fn recovered_probe_replaces_the_first_seen_guess() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -129,7 +130,7 @@ async fn known_sidecar_version_skips_the_probe() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "1.0.0", "thing-1.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
@@ -143,13 +144,16 @@ async fn known_sidecar_version_skips_the_probe() {
 #[tokio::test]
 async fn gate_is_off_without_cooldown_or_flag() {
     // restrict flag without a cooldown window: nothing to enforce.
-    let proxy = TestProxy::builder().restrict_downloads().start().await;
+    let proxy = TestProxy::builder()
+        .restrict_downloads()
+        .start_proxy()
+        .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "2.0.0", "thing-2.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
     assert_eq!(proxy.get(&path).await.status(), 200);
 
     // Cooldown without the restrict flag: downloads are ungated.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let path = proxy.file_path(GROUP, ARTIFACT, "2.0.0", "thing-2.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;
     assert_eq!(proxy.get(&path).await.status(), 200);
@@ -161,8 +165,8 @@ async fn override_exempts_artifact_from_the_gate() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .override_artifact("com.example:thing")
-        .start()
+        .override_package("com.example:thing")
+        .start_proxy()
         .await;
     let path = proxy.file_path(GROUP, ARTIFACT, "2.0.0", "thing-2.0.0.jar");
     proxy.mock_file(&path, JAR_BYTES, &[]).await;

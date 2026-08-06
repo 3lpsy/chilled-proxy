@@ -185,7 +185,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chilled-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "bytes",
@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "chilled-core",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-testkit"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "chilled-core",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "crates-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "bytes",
@@ -927,7 +927,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "maven-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "bytes",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "npm-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "bytes",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "pypi-proxy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "axum",
  "bytes",
@@ -1249,6 +1249,7 @@ dependencies = [
  "base64",
  "bytes",
  "futures-core",
+ "h2",
  "http",
  "http-body",
  "http-body-util",

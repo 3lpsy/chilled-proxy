@@ -21,9 +21,11 @@ pub struct CacheStats {
 }
 
 /// A mountable registry proxy.
+///
+/// No identifier lives here: a registry can be mounted more than once, so the
+/// mount name belongs to the mount (the binary's `MountedRegistry`), not the
+/// proxy.
 pub trait RegistryProxy: Send + Sync {
-    /// Stable mount identifier (`crates`, `npm`, `pypi`, `maven`).
-    fn id(&self) -> &'static str;
     /// The registry's router, with routes relative to its mount prefix.
     fn router(&self) -> Router;
     /// Scans this registry's artifact cache (blocking; call off the runtime).

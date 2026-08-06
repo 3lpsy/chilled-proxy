@@ -2,9 +2,15 @@
 //! own cache, which is what makes a Gradle build (Central + plugin portal +
 //! Google Maven) servable from a single process.
 
-use clap::Parser;
+// The built-in Gradle mounts are off in these tests (`start_maven_only`): they
+// point at the real plugin portal and Google Maven, so each test declares the
+// mounts it means to exercise. That the built-ins are served by default is
+// covered by the CLI unit tests and by `endpoints.rs`.
+
+mod common;
+
+use common::TestApp;
 use serde_json::Value;
-use tempfile::TempDir;
 use wiremock::matchers::{method, path as match_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -13,71 +19,6 @@ const JAR: &str = "com/example/thing/1.0/thing-1.0.jar";
 
 /// The POM the age probe HEADs for `JAR`.
 const POM: &str = "/com/example/thing/1.0/thing-1.0.pom";
-
-/// A running app plus the temp cache directory it writes into.
-struct TestApp {
-    base_url: String,
-    client: reqwest::Client,
-    tmp: TempDir,
-}
-
-impl TestApp {
-    /// Starts the app with every registry but Maven disabled, plus `extra`.
-    ///
-    /// The built-in Gradle mounts are off here: they point at the real plugin
-    /// portal and Google Maven, so these tests declare the mounts they mean to
-    /// exercise. That the built-ins are served by default is covered by the CLI
-    /// unit tests and by `endpoints.rs`.
-    async fn start(extra: &[String]) -> TestApp {
-        let tmp = TempDir::new().unwrap();
-        let mut argv = vec![
-            "chilled-proxy".to_string(),
-            "--cache-dir".into(),
-            tmp.path().to_string_lossy().into_owned(),
-            "--no-default-mounts".into(),
-            "--disable-crates".into(),
-            "--disable-npm".into(),
-            "--disable-pypi".into(),
-        ];
-        argv.extend(extra.iter().cloned());
-
-        let cli = chilled_proxy::cli::Cli::try_parse_from(argv).unwrap();
-        cli.check_mounts().expect("mounts are valid");
-        let app = chilled_proxy::build_app(&cli);
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(chilled_core::serve::serve_listener(listener, app));
-
-        let client = reqwest::Client::new();
-        let base_url = format!("http://{addr}");
-        for _ in 0..100 {
-            if client
-                .get(format!("{base_url}/healthz"))
-                .send()
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-
-        TestApp {
-            base_url,
-            client,
-            tmp,
-        }
-    }
-
-    async fn get(&self, path: &str) -> reqwest::Response {
-        self.client
-            .get(format!("{}{}", self.base_url, path))
-            .send()
-            .await
-            .expect("request")
-    }
-}
 
 /// A mock Maven repository serving `body` for the one jar under test.
 async fn mock_repo(body: &'static str) -> MockServer {
@@ -95,7 +36,7 @@ async fn each_mount_fetches_from_its_own_upstream() {
     let central = mock_repo("from-central").await;
     let portal = mock_repo("from-portal").await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", central.uri()),
         "--maven-mount".into(),
@@ -122,7 +63,7 @@ async fn mounts_do_not_share_a_cache() {
     let central = mock_repo("from-central").await;
     let portal = mock_repo("from-portal").await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", central.uri()),
         "--maven-mount".into(),
@@ -148,7 +89,7 @@ async fn every_mount_is_listed_and_reported() {
     let central = mock_repo("from-central").await;
     let portal = mock_repo("from-portal").await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--enable-metrics".into(),
         "--maven-upstream-url".into(),
         format!("{}/", central.uri()),
@@ -177,7 +118,7 @@ async fn every_mount_is_listed_and_reported() {
 async fn a_disabled_registry_still_serves_its_extra_mounts() {
     let portal = mock_repo("from-portal").await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--disable-maven".into(),
         "--maven-mount".into(),
         format!("name=plugins,upstream={}/", portal.uri()),
@@ -208,7 +149,7 @@ async fn a_mount_can_carry_its_own_cooldown() {
         .mount(&portal)
         .await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", central.uri()),
         "--maven-mount".into(),
@@ -222,4 +163,168 @@ async fn a_mount_can_carry_its_own_cooldown() {
     assert_eq!(app.get(&format!("/maven/{JAR}")).await.status(), 200);
     // Fail-closed: the age probe cannot clear a version inside the window.
     assert_eq!(app.get(&format!("/plugins/{JAR}")).await.status(), 403);
+}
+
+/// A minimal full npm packument for one version, tarball hosted at `upstream`.
+fn npm_packument(name: &str, upstream: &str) -> String {
+    format!(
+        r#"{{"name":"{name}","dist-tags":{{"latest":"1.0.0"}},"versions":{{"1.0.0":{{"name":"{name}","version":"1.0.0","dist":{{"tarball":"{upstream}{name}/-/{name}-1.0.0.tgz"}}}}}},"time":{{"1.0.0":"2000-01-01T00:00:00Z"}}}}"#
+    )
+}
+
+#[tokio::test]
+async fn npm_mounts_rewrite_tarballs_to_their_own_mount() {
+    let reg_a = MockServer::start().await;
+    let reg_b = MockServer::start().await;
+    for reg in [&reg_a, &reg_b] {
+        Mock::given(method("GET"))
+            .and(match_path("/foo"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(npm_packument("foo", &format!("{}/", reg.uri()))),
+            )
+            .mount(reg)
+            .await;
+    }
+
+    let app = TestApp::start_bare(&[
+        "--no-default-mounts".into(),
+        "--disable-crates".into(),
+        "--disable-pypi".into(),
+        "--disable-maven".into(),
+        "--npm-upstream-url".into(),
+        format!("{}/", reg_a.uri()),
+        "--npm-mount".into(),
+        format!("name=npm2,upstream={}/", reg_b.uri()),
+    ])
+    .await;
+
+    let a: Value = app.get("/npm/foo").await.json().await.unwrap();
+    let b: Value = app.get("/npm2/foo").await.json().await.unwrap();
+    let tarball = |doc: &Value| {
+        doc["versions"]["1.0.0"]["dist"]["tarball"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // Each mount rewrites tarball URLs to its own external mount URL.
+    assert!(tarball(&a).contains("/npm/foo/-/"), "got {}", tarball(&a));
+    assert!(tarball(&b).contains("/npm2/foo/-/"), "got {}", tarball(&b));
+}
+
+/// A minimal PEP 691 simple index for one file hosted at `upstream`.
+fn simple_index(name: &str, upstream: &str) -> String {
+    format!(
+        r#"{{"meta":{{"api-version":"1.0"}},"name":"{name}","versions":["1.0.0"],"files":[{{"filename":"{name}-1.0.0.tar.gz","url":"{upstream}packages/{name}-1.0.0.tar.gz","hashes":{{}},"upload-time":"2000-01-01T00:00:00Z"}}]}}"#
+    )
+}
+
+#[tokio::test]
+async fn pypi_mounts_rewrite_file_urls_to_their_own_mount() {
+    const SIMPLE_CTYPE: &str = "application/vnd.pypi.simple.v1+json";
+    let idx_a = MockServer::start().await;
+    let idx_b = MockServer::start().await;
+    for idx in [&idx_a, &idx_b] {
+        Mock::given(method("GET"))
+            .and(match_path("/foo/"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                simple_index("foo", &format!("{}/", idx.uri())),
+                SIMPLE_CTYPE,
+            ))
+            .mount(idx)
+            .await;
+    }
+
+    let app = TestApp::start_bare(&[
+        "--no-default-mounts".into(),
+        "--disable-crates".into(),
+        "--disable-npm".into(),
+        "--disable-maven".into(),
+        "--pypi-upstream-url".into(),
+        format!("{}/", idx_a.uri()),
+        "--pypi-files-url".into(),
+        format!("{}/", idx_a.uri()),
+        "--pypi-mount".into(),
+        format!("name=pypi2,upstream={0}/,files={0}/", idx_b.uri()),
+    ])
+    .await;
+
+    let file_url = |body: &Value| body["files"][0]["url"].as_str().unwrap().to_owned();
+    let get = |path: &'static str| {
+        let client = app.client.clone();
+        let url = format!("{}{}", app.base_url, path);
+        async move {
+            client
+                .get(url)
+                .header("accept", SIMPLE_CTYPE)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    // Each mount rewrites file URLs to its own external mount URL — even for
+    // the same project name, so the per-mount memo caches cannot cross-serve.
+    let a = get("/pypi/simple/foo/").await;
+    let b = get("/pypi2/simple/foo/").await;
+    assert!(
+        file_url(&a).contains("/pypi/files/foo/"),
+        "got {}",
+        file_url(&a)
+    );
+    assert!(
+        file_url(&b).contains("/pypi2/files/foo/"),
+        "got {}",
+        file_url(&b)
+    );
+
+    // Second round comes from each mount's own caches, still not crossed.
+    let a = get("/pypi/simple/foo/").await;
+    let b = get("/pypi2/simple/foo/").await;
+    assert!(file_url(&a).contains("/pypi/files/foo/"));
+    assert!(file_url(&b).contains("/pypi2/files/foo/"));
+}
+
+#[tokio::test]
+async fn crates_mounts_generate_their_own_config_json() {
+    let up_a = MockServer::start().await;
+    let up_b = MockServer::start().await;
+
+    let app = TestApp::start_bare(&[
+        "--no-default-mounts".into(),
+        "--disable-npm".into(),
+        "--disable-pypi".into(),
+        "--disable-maven".into(),
+        "--crates-index-url".into(),
+        format!("{}/", up_a.uri()),
+        "--crates-upstream-url".into(),
+        format!("{}/", up_a.uri()),
+        "--crates-mount".into(),
+        format!("name=crates2,index={0}/,upstream={0}/", up_b.uri()),
+    ])
+    .await;
+
+    let a: Value = app
+        .get("/crates/index/config.json")
+        .await
+        .json()
+        .await
+        .unwrap();
+    let b: Value = app
+        .get("/crates2/index/config.json")
+        .await
+        .json()
+        .await
+        .unwrap();
+    // Each mount's dl URL points back at that mount, and api at its upstream.
+    assert!(a["dl"].as_str().unwrap().ends_with("/crates/api/v1/crates"));
+    assert!(b["dl"]
+        .as_str()
+        .unwrap()
+        .ends_with("/crates2/api/v1/crates"));
+    assert!(a["api"].as_str().unwrap().starts_with(&up_a.uri()));
+    assert!(b["api"].as_str().unwrap().starts_with(&up_b.uri()));
 }

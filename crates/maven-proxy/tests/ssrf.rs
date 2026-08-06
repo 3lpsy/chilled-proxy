@@ -3,11 +3,12 @@
 
 mod common;
 
+use common::StartProxy;
 use common::TestProxy;
 
 #[tokio::test]
 async fn hostile_paths_never_reach_upstream() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     // Literal `..` segments are normalized away by HTTP clients before they
     // ever reach the wire; the server-side rejection is unit-tested in
@@ -49,7 +50,7 @@ async fn hostile_paths_never_reach_upstream() {
 
 #[tokio::test]
 async fn non_read_methods_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let client = reqwest::Client::new();
     let url = format!(

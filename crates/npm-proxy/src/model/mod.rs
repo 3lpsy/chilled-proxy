@@ -6,11 +6,11 @@ mod tests;
 
 use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
-
-use chilled_core::http::{fmt_http_date, parse_http_date};
 
 use crate::valid;
+
+/// Cached packument response metadata: HTTP validators and freshness.
+pub(crate) type NpmEntry = chilled_core::cache::CacheEntry;
 
 /// A validated npm package reference (optionally scoped).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,69 +79,5 @@ impl PackageRef {
     /// Upstream tarball path, relative to the registry root.
     pub(crate) fn upstream_tarball_rel(&self, file: &str) -> String {
         format!("{self}/-/{file}")
-    }
-}
-
-/// Cached packument response metadata: HTTP validators and freshness.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct NpmEntry {
-    /// HTTP entity tag header.
-    etag: Option<String>,
-    /// Packument file modification time.
-    mtime: Option<SystemTime>,
-    /// Last upstream update check time.
-    atime: Option<Instant>,
-}
-
-impl NpmEntry {
-    /// Creates an empty metadata entry.
-    pub(crate) fn new() -> Self {
-        NpmEntry::default()
-    }
-
-    /// Checks if this entry describes the same body as `other`.
-    pub(crate) fn is_equivalent(&self, other: &NpmEntry) -> bool {
-        (self.etag().is_some() && (self.etag() == other.etag()))
-            || (self.last_modified().is_some() && (self.last_modified() == other.last_modified()))
-    }
-
-    /// Checks if this entry is expired for the TTL given.
-    pub(crate) fn is_expired_with_ttl(&self, ttl: &Duration) -> bool {
-        self.atime.is_some_and(|atime| atime.elapsed() > *ttl)
-    }
-
-    /// Gets the HTTP entity tag metadata.
-    pub(crate) fn etag(&self) -> Option<&str> {
-        self.etag.as_deref()
-    }
-
-    /// Gets the HTTP Last-Modified metadata.
-    pub(crate) fn last_modified(&self) -> Option<String> {
-        self.mtime.map(fmt_http_date)
-    }
-
-    /// Gets the file modification time metadata.
-    pub(crate) fn mtime(&self) -> Option<SystemTime> {
-        self.mtime
-    }
-
-    /// Sets the HTTP entity tag metadata.
-    pub(crate) fn set_etag(&mut self, etag: &str) {
-        self.etag = Some(etag.to_owned());
-    }
-
-    /// Sets the HTTP Last-Modified metadata.
-    pub(crate) fn set_last_modified(&mut self, last_modified: &str) {
-        self.mtime = parse_http_date(last_modified);
-    }
-
-    /// Sets the file modification time metadata.
-    pub(crate) fn set_mtime(&mut self, mtime: SystemTime) {
-        self.mtime = Some(mtime);
-    }
-
-    /// Updates the last upstream access time metadata.
-    pub(crate) fn set_last_updated(&mut self) {
-        self.atime = Some(Instant::now());
     }
 }

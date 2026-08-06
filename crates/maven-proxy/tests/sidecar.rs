@@ -2,6 +2,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{metadata_xml, TestProxy, OLD};
 
 const GROUP: &str = "com/example";
@@ -9,7 +10,7 @@ const ARTIFACT: &str = "thing";
 
 #[tokio::test]
 async fn probe_failure_records_first_seen_and_gates() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -38,7 +39,7 @@ async fn probe_failure_records_first_seen_and_gates() {
 
 #[tokio::test]
 async fn sidecar_is_persisted_and_not_reprobed() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0"], "1.0.0", "1.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -66,7 +67,7 @@ async fn sidecar_is_persisted_and_not_reprobed() {
 
 #[tokio::test]
 async fn seeded_sidecar_skips_probes_entirely() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -91,7 +92,7 @@ async fn seeded_sidecar_skips_probes_entirely() {
 
 #[tokio::test]
 async fn corrupt_sidecar_is_tolerated_and_reprobed() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0"], "1.0.0", "1.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)

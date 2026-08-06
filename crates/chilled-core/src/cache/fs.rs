@@ -3,7 +3,7 @@
 
 use std::fs::{create_dir_all, metadata, read, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
@@ -66,6 +66,27 @@ pub fn fetch_file(path: &Path) -> Option<Vec<u8>> {
 /// Returns a cache file's mtime, if the file exists.
 pub fn file_mtime(path: &Path) -> Option<SystemTime> {
     metadata(path).ok()?.modified().ok()
+}
+
+/// [`store_file`] off the blocking thread pool.
+pub async fn store_file_async(path: PathBuf, data: bytes::Bytes, mtime: Option<SystemTime>) {
+    let _ = tokio::task::spawn_blocking(move || store_file(&path, &data, mtime)).await;
+}
+
+/// [`fetch_file`] off the blocking thread pool.
+pub async fn fetch_file_async(path: PathBuf) -> Option<Vec<u8>> {
+    tokio::task::spawn_blocking(move || fetch_file(&path))
+        .await
+        .ok()
+        .flatten()
+}
+
+/// [`file_mtime`] off the blocking thread pool.
+pub async fn file_mtime_async(path: PathBuf) -> Option<SystemTime> {
+    tokio::task::spawn_blocking(move || file_mtime(&path))
+        .await
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]

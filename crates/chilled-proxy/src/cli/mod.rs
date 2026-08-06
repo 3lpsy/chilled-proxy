@@ -16,4 +16,4 @@ mod instances;
 pub(crate) mod settings;
 
 pub use args::Cli;
-pub use instances::RegistryInstance;
+pub use instances::{RegistryInstance, ResolvedConfig};

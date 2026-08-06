@@ -1,14 +1,14 @@
 //! Fetching an index entry upstream and the cache/upstream serve ladder.
 
-use axum::http::header;
 use axum::response::Response;
-use chilled_core::http::{error_response, json_response, read_capped, FetchError};
+use chilled_core::http::{conditional_get, error_response, json_response, FetchError};
 use log::{debug, error, warn};
 
 use crate::cache::IndexEntry;
 use crate::http::format_json_error;
 use crate::routes::index::serve::{
-    cache_find_index, cache_read_index, cache_write_index, index_not_modified, index_ok,
+    cache_find_index, cache_read_index, cache_write_index, index_memo_hit, index_not_modified,
+    index_ok,
 };
 use crate::state::AppState;
 
@@ -28,43 +28,19 @@ pub(crate) async fn download_index_entry(
 ) -> Result<IndexResponse, FetchError> {
     let url = state.config.index_url.join(&entry.to_index_url()).unwrap();
 
-    // Pin identity encoding: a compressed body would fail the UTF-8 check and
-    // pass through unfiltered, silently disabling age-gating.
-    let mut request = state
-        .client
-        .get(url)
-        .header(header::ACCEPT_ENCODING, "identity");
-    if let Some(etag) = entry.etag() {
-        request = request.header(header::IF_NONE_MATCH, etag);
-    } else if let Some(last_modified) = entry.last_modified() {
-        request = request.header(header::IF_MODIFIED_SINCE, last_modified);
-    }
-
-    let mut response = request.send().await.map_err(FetchError::Http)?;
-    let status = response.status().as_u16();
-
-    if let Some(etag) = response
-        .headers()
-        .get(header::ETAG)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_etag(etag);
-    }
-    if let Some(last_modified) = response
-        .headers()
-        .get(header::LAST_MODIFIED)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_last_modified(last_modified);
-    }
-    entry.set_last_updated();
-
-    let data = read_capped(&mut response, state.config.settings.max_metadata_size).await?;
+    let response = conditional_get(
+        &state.client,
+        url,
+        None,
+        &mut entry.meta,
+        state.config.settings.max_metadata_size,
+    )
+    .await?;
 
     Ok(IndexResponse {
         entry,
-        status,
-        data,
+        status: response.status,
+        data: response.data,
     })
 }
 
@@ -108,7 +84,7 @@ pub(crate) async fn forward_index(
             cache_write_index(&state.config.index_dir, &response.entry, &response.data).await;
             state.metadata.store(name, response.entry.clone());
 
-            if window_ok && response.entry.is_equivalent(&entry) {
+            if window_ok && response.entry.meta.is_equivalent(&entry.meta) {
                 index_not_modified(&response.entry, &state.config, name)
             } else {
                 index_ok(&response.entry, response.data, state, name).await
@@ -118,8 +94,11 @@ pub(crate) async fn forward_index(
             debug!("fetch: cached index entry for {name} is up to date");
             state.metadata.store(name, response.entry.clone());
 
-            if window_ok && response.entry.is_equivalent(&entry) {
+            if window_ok && response.entry.meta.is_equivalent(&entry.meta) {
                 index_not_modified(&response.entry, &state.config, name)
+            } else if let Some(resp) = index_memo_hit(&response.entry, state, name) {
+                // A memo hit needs no pristine body: skip the disk read.
+                resp
             } else if let Some(data) = cache_read_index(&state.config.index_dir, &entry).await {
                 index_ok(&response.entry, data, state, name).await
             } else {
@@ -127,6 +106,19 @@ pub(crate) async fn forward_index(
                 state.metadata.invalidate(name);
                 error_response(503)
             }
+        }
+        code if (500..=599).contains(&code) => {
+            // Upstream trouble: a cached copy beats failing the build. 4xx
+            // stays forwarded — a 404 is a real answer, not an outage.
+            if let Some(data) = cache_read_index(&state.config.index_dir, &entry).await {
+                warn!("proxy: upstream returned HTTP {code} for {name}; serving cached index");
+                let stale = cache_find_index(&state.config.index_dir, name)
+                    .await
+                    .unwrap_or_else(|| IndexEntry::new(name));
+                return index_ok(&stale, data, state, name).await;
+            }
+            warn!("fetch: upstream returned HTTP status {code} for {name}");
+            json_response(code, String::from_utf8_lossy(&response.data).into_owned())
         }
         code => {
             // Forward other upstream statuses (e.g. 404) verbatim.

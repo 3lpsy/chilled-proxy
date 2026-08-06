@@ -8,97 +8,91 @@ use chilled_core::config::{parse_overrides, RegistrySettings};
 use url::Url;
 
 use crate::cli::Cli;
-use crate::mount;
+use crate::kind::RegistryKind;
 use crate::spec::MountSpec;
 
 impl Cli {
-    /// Validates the mounts against each other (root exclusivity, duplicates,
-    /// nesting, reserved endpoints) and the mount specs' own syntax. Call
-    /// before building the router.
+    /// Validates the configuration (mount syntax, layout, auth) without
+    /// keeping the result. Shorthand for [`Cli::resolve`] where only the
+    /// validation verdict matters.
     pub fn check_mounts(&self) -> Result<(), String> {
-        let instances = self.instances()?;
-        let mounts: Vec<(&str, String)> = instances
-            .iter()
-            .map(|i| (i.name.as_str(), i.path.clone()))
-            .collect();
-        mount::check(&mounts)
+        self.resolve().map(|_| ())
     }
 
     /// Resolves a registry's default-instance settings.
-    pub fn registry_settings(&self, id: &str) -> RegistrySettings {
-        self.settings_for(id, id, self.mount_path(id), None)
+    #[cfg(test)]
+    pub(crate) fn registry_settings(&self, kind: RegistryKind) -> RegistrySettings {
+        self.settings_for(kind, kind.id(), self.mount_path(kind), None)
     }
 
     /// Resolves one instance's settings: a spec value wins over the registry
     /// flag, which wins over the general flag.
     pub(super) fn settings_for(
         &self,
-        id: &str,
+        kind: RegistryKind,
         name: &str,
         path: &str,
         spec: Option<&MountSpec>,
     ) -> RegistrySettings {
-        let (cooldown, ttl, overrides, restrict, proxy_url) = match id {
-            "crates" => (
+        let (cooldown, ttl, overrides, restrict, proxy_url) = match kind {
+            RegistryKind::Crates => (
                 self.cooldown_crates,
                 self.cache_ttl_crates,
                 &self.cooldown_overrides_crates,
                 self.restrict_downloads_crates,
                 &self.crates_proxy_url,
             ),
-            "npm" => (
+            RegistryKind::Npm => (
                 self.cooldown_npm,
                 self.cache_ttl_npm,
                 &self.cooldown_overrides_npm,
                 self.restrict_downloads_npm,
                 &self.npm_proxy_url,
             ),
-            "pypi" => (
+            RegistryKind::Pypi => (
                 self.cooldown_pypi,
                 self.cache_ttl_pypi,
                 &self.cooldown_overrides_pypi,
                 self.restrict_downloads_pypi,
                 &self.pypi_proxy_url,
             ),
-            "maven" => (
+            RegistryKind::Maven => (
                 self.cooldown_maven,
                 self.cache_ttl_maven,
                 &self.cooldown_overrides_maven,
                 self.restrict_downloads_maven,
                 &self.maven_proxy_url,
             ),
-            other => unreachable!("unknown registry id: {other}"),
         };
 
         // Size caps carry a *per-registry* built-in default (a 16 MiB crate and
         // a 512 MiB jar are both normal), so the fall-back chain ends at that
         // registry's own constant rather than at one shared general value.
-        let (meta_registry, artifact_registry, meta_default, artifact_default) = match id {
-            "crates" => (
+        let (meta_registry, artifact_registry, meta_default, artifact_default) = match kind {
+            RegistryKind::Crates => (
                 self.max_metadata_size_crates,
                 self.max_artifact_size_crates,
                 crates_proxy::DEFAULT_MAX_METADATA_SIZE,
                 crates_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
             ),
-            "npm" => (
+            RegistryKind::Npm => (
                 self.max_metadata_size_npm,
                 self.max_artifact_size_npm,
                 npm_proxy::DEFAULT_MAX_METADATA_SIZE,
                 npm_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
             ),
-            "pypi" => (
+            RegistryKind::Pypi => (
                 self.max_metadata_size_pypi,
                 self.max_artifact_size_pypi,
                 pypi_proxy::DEFAULT_MAX_METADATA_SIZE,
                 pypi_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
             ),
-            "maven" => (
+            RegistryKind::Maven => (
                 self.max_metadata_size_maven,
                 self.max_artifact_size_maven,
                 maven_proxy::DEFAULT_MAX_METADATA_SIZE,
                 maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
             ),
-            other => unreachable!("unknown registry id: {other}"),
         };
 
         // Override *lists* are not settable per mount: the spec grammar spends
@@ -113,7 +107,7 @@ impl Cli {
         // derived from its path.
         let proxy_url = match spec {
             Some(spec) => spec.proxy_url.clone(),
-            None if name == id => proxy_url.clone(),
+            None if name == kind.id() => proxy_url.clone(),
             None => None,
         };
 
@@ -149,8 +143,19 @@ impl Cli {
         }
     }
 
-    /// Default external mount URL, derived from the listen address and mount.
+    /// Default external mount URL: the reverse-proxy base plus the mount path
+    /// when one is configured, else derived from the listen address.
     fn default_proxy_url(&self, mount: &str) -> Url {
+        if let Some(base) = &self.reverse_proxy_url {
+            let base = ensure_trailing_slash(base);
+            let mount = mount.trim_matches('/');
+            if mount.is_empty() {
+                return base;
+            }
+            return base
+                .join(&format!("{mount}/"))
+                .expect("valid reverse-proxy mount URL");
+        }
         let host_port = match self.listen.rsplit_once(':') {
             // An all-interfaces bind has no routable host; default to localhost.
             Some((h, p)) if h != "0.0.0.0" && h != "[::]" && h != "::" => {

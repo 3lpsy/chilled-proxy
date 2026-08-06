@@ -5,8 +5,9 @@
 //! unit tests, which inject a lookup instead of mutating the process
 //! environment — which is global, and these tests run in parallel.
 
-use clap::Parser;
-use tempfile::TempDir;
+mod common;
+
+use common::TestApp;
 use wiremock::matchers::{method, path as match_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -15,64 +16,6 @@ const JAR: &str = "com/example/thing/1.0/thing-1.0.jar";
 
 /// base64("alice:s3cr3t").
 const EXPECTED_BASIC: &str = "Basic YWxpY2U6czNjcjN0";
-
-struct TestApp {
-    base_url: String,
-    client: reqwest::Client,
-    _tmp: TempDir,
-}
-
-impl TestApp {
-    async fn start(extra: &[String]) -> TestApp {
-        let tmp = TempDir::new().unwrap();
-        let mut argv = vec![
-            "chilled-proxy".to_string(),
-            "--cache-dir".into(),
-            tmp.path().to_string_lossy().into_owned(),
-            "--no-default-mounts".into(),
-            "--disable-crates".into(),
-            "--disable-npm".into(),
-            "--disable-pypi".into(),
-        ];
-        argv.extend(extra.iter().cloned());
-
-        let cli = chilled_proxy::cli::Cli::try_parse_from(argv).unwrap();
-        cli.check_mounts().expect("mounts are valid");
-        let app = chilled_proxy::build_app(&cli);
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(chilled_core::serve::serve_listener(listener, app));
-
-        let client = reqwest::Client::new();
-        let base_url = format!("http://{addr}");
-        for _ in 0..100 {
-            if client
-                .get(format!("{base_url}/healthz"))
-                .send()
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-
-        TestApp {
-            base_url,
-            client,
-            _tmp: tmp,
-        }
-    }
-
-    async fn get(&self, path: &str) -> reqwest::Response {
-        self.client
-            .get(format!("{}{}", self.base_url, path))
-            .send()
-            .await
-            .expect("request")
-    }
-}
 
 /// A repository that serves the jar to anyone, recording what it was sent.
 async fn open_repo() -> MockServer {
@@ -107,7 +50,7 @@ async fn basic_auth_reaches_the_upstream() {
         .mount(&repo)
         .await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", repo.uri()),
         "--upstream-basic-auth".into(),
@@ -123,7 +66,7 @@ async fn basic_auth_reaches_the_upstream() {
 #[tokio::test]
 async fn custom_headers_reach_the_upstream() {
     let repo = open_repo().await;
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", repo.uri()),
         "--upstream-header".into(),
@@ -151,7 +94,7 @@ async fn credentials_do_not_cross_mounts() {
     let secured = open_repo().await;
     let open = open_repo().await;
 
-    let app = TestApp::start(&[
+    let app = TestApp::start_maven_only(&[
         "--maven-upstream-url".into(),
         format!("{}/", secured.uri()),
         "--maven-mount".into(),
@@ -193,11 +136,7 @@ async fn auth_applies_to_both_of_a_mounts_urls() {
         .mount(&downloads)
         .await;
 
-    let tmp = TempDir::new().unwrap();
-    let cli = chilled_proxy::cli::Cli::try_parse_from([
-        "chilled-proxy".to_string(),
-        "--cache-dir".into(),
-        tmp.path().to_string_lossy().into_owned(),
+    let app = TestApp::start_bare(&[
         "--no-default-mounts".into(),
         "--disable-npm".into(),
         "--disable-pypi".into(),
@@ -209,37 +148,10 @@ async fn auth_applies_to_both_of_a_mounts_urls() {
         "--upstream-basic-auth".into(),
         "crates=alice:s3cr3t".into(),
     ])
-    .unwrap();
-    cli.check_mounts().expect("mounts are valid");
-    let app = chilled_proxy::build_app(&cli);
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(chilled_core::serve::serve_listener(listener, app));
-    let client = reqwest::Client::new();
-    let base_url = format!("http://{addr}");
-    for _ in 0..100 {
-        if client
-            .get(format!("{base_url}/healthz"))
-            .send()
-            .await
-            .is_ok()
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    .await;
 
     // The index URL...
-    assert_eq!(
-        client
-            .get(format!("{base_url}/crates/index/se/rd/serde"))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        200
-    );
+    assert_eq!(app.get("/crates/index/se/rd/serde").await.status(), 200);
     assert_eq!(
         received_header(&index, "authorization").await.as_deref(),
         Some(EXPECTED_BASIC)
@@ -247,13 +159,8 @@ async fn auth_applies_to_both_of_a_mounts_urls() {
 
     // ...and the download URL.
     assert_eq!(
-        client
-            .get(format!(
-                "{base_url}/crates/api/v1/crates/serde/1.0.0/download"
-            ))
-            .send()
+        app.get("/crates/api/v1/crates/serde/1.0.0/download")
             .await
-            .unwrap()
             .status(),
         200
     );

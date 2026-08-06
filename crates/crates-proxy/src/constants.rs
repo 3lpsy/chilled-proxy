@@ -6,8 +6,11 @@ pub const INDEX_CRATES_IO_URL: &str = "https://index.crates.io/";
 /// Upstream `crates.io` registry URL.
 pub const CRATES_IO_URL: &str = "https://crates.io/";
 
-/// Crates download API path on the upstream server (absolute).
-pub(crate) const CRATES_API_PATH: &str = "/api/v1/crates/";
+/// Crates download API path, relative so it appends to an upstream URL that
+/// carries a path prefix (e.g. a Nexus repository under `/repository/cargo/`)
+/// instead of replacing it. Also joined onto this proxy's mount URL for
+/// `config.json`.
+pub(crate) const CRATES_API_PATH: &str = "api/v1/crates/";
 
 /// Crates download API path relative to this proxy's mount (for `config.json`).
 pub(crate) const CRATES_API_REL: &str = "api/v1/crates";

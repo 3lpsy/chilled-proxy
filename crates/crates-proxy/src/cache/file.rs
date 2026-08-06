@@ -20,7 +20,7 @@ pub(crate) fn cache_fetch_crate(dir: &Path, crate_info: &CrateInfo) -> Option<Ve
 
 /// Caches the index entry file, pinning its mtime to the `Last-Modified` metadata.
 pub(crate) fn cache_store_index_entry(dir: &Path, entry: &IndexEntry, data: &[u8]) {
-    store_file(&dir.join(entry.to_file_path()), data, entry.mtime());
+    store_file(&dir.join(entry.to_file_path()), data, entry.meta.mtime());
 }
 
 /// Fetches the cached index entry file, if present.
@@ -32,7 +32,7 @@ pub(crate) fn cache_fetch_index_entry(dir: &Path, entry: &IndexEntry) -> Option<
 pub(crate) fn cache_try_find_index_entry(dir: &Path, name: &str) -> Option<IndexEntry> {
     let mut entry = IndexEntry::new(name);
     let mtime = file_mtime(&dir.join(entry.to_file_path()))?;
-    entry.set_mtime(mtime);
+    entry.meta.set_mtime(mtime);
     Some(entry)
 }
 
@@ -59,7 +59,9 @@ mod tests {
     fn index_entry_round_trip_pins_mtime() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut entry = IndexEntry::new("serde");
-        entry.set_mtime(UNIX_EPOCH + Duration::from_secs(784_111_777));
+        entry
+            .meta
+            .set_mtime(UNIX_EPOCH + Duration::from_secs(784_111_777));
 
         cache_store_index_entry(tmp.path(), &entry, b"{}\n");
         assert_eq!(
@@ -69,7 +71,7 @@ mod tests {
 
         // Metadata is recreatable from the pinned file mtime.
         let found = cache_try_find_index_entry(tmp.path(), "serde").unwrap();
-        assert_eq!(found.mtime(), entry.mtime());
+        assert_eq!(found.meta.mtime(), entry.meta.mtime());
         assert_eq!(cache_try_find_index_entry(tmp.path(), "missing"), None);
     }
 }

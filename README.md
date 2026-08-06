@@ -280,11 +280,16 @@ artifacts. Everything else falls back to that registry's flags, then to the gene
 | `name` | all | *required* |
 | `path` | all | `/<name>` |
 | `upstream` | all | the registry's `--<registry>-upstream-url` |
-| `index` | crates.io | `--crates-index-url` |
-| `files` | PyPI | `--pypi-files-url` |
-| `proxy-url` | all | derived from `--listen` and the path |
+| `index` | crates.io | `--crates-index-url` — but see below |
+| `files` | PyPI | `--pypi-files-url` — but see below |
+| `file-hosts` | PyPI | `--pypi-file-hosts` (space-separated; replaces, not extends) |
+| `proxy-url` | all | `--reverse-proxy-url` + path, else derived from `--listen` |
 | `cooldown` `cache-ttl` `restrict-downloads` | all | the registry's flag, then the general one |
 | `max-metadata-size` `max-artifact-size` | all | the registry's flag, the general one, then its built-in default |
+
+A mount that sets `upstream=` on a two-URL registry must state the second URL too: `index=` for
+crates.io, `files=` for PyPI. Inheriting the default there would silently pair a private mirror
+with the public index or file host, so that combination is refused at startup.
 
 Cooldown-override lists are not settable per mount — the spec grammar spends the comma on its own
 separator — so a mount inherits `--cooldown-overrides[-<registry>]`. In an env var, separate
@@ -468,16 +473,17 @@ the same way.
 
 | Flag (env var) | Purpose | Default |
 | --- | --- | --- |
-| `--cache-dir` (`CHILLED_CACHE_DIR`) | Root of the on-disk cache; one subdir per registry. | `/var/cache/chilled` |
+| `--cache-dir` (`CHILLED_CACHE_DIR`) | Root of the on-disk cache; one subdir per mount. | `/var/cache/chilled` |
 | `--cache-ttl` (`CHILLED_CACHE_TTL`) | Seconds before cached metadata is revalidated. | `3600` |
 | `--listen` / `--listen-unix` | Listen on a `host:port` or a Unix-domain socket. | `0.0.0.0:3080` |
+| `--reverse-proxy-url` (`CHILLED_REVERSE_PROXY_URL`) | External base URL behind a reverse proxy; every mount's default proxy URL is this base plus its path. | unset (derive from `--listen`) |
 | `--crates-index-url` (`CHILLED_CRATES_INDEX_URL`) | Upstream sparse-index URL. | `https://index.crates.io/` |
 | `--crates-upstream-url` (`CHILLED_CRATES_UPSTREAM_URL`) | Upstream crate-download URL. | `https://crates.io/` |
 | `--npm-upstream-url` (`CHILLED_NPM_UPSTREAM_URL`) | Upstream npm registry URL. | `https://registry.npmjs.org/` |
 | `--pypi-upstream-url` (`CHILLED_PYPI_UPSTREAM_URL`) | Upstream PyPI simple-index URL. | `https://pypi.org/simple/` |
 | `--pypi-files-url` (`CHILLED_PYPI_FILES_URL`) | Upstream PyPI file host. | `https://files.pythonhosted.org/` |
 | `--maven-upstream-url` (`CHILLED_MAVEN_UPSTREAM_URL`) | Upstream Maven repository URL. | `https://repo.maven.apache.org/maven2/` |
-| `--{crates,npm,pypi,maven}-proxy-url` | External mount URLs (rewritten into metadata). | derived from `--listen` |
+| `--{crates,npm,pypi,maven}-proxy-url` | External mount URLs (rewritten into metadata). | `--reverse-proxy-url` + path, else derived from `--listen` |
 
 Run `chilled-proxy --help` for the full list.
 

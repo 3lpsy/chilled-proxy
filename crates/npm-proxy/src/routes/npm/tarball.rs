@@ -138,5 +138,3 @@ async fn download_tarball(
         }
     }
 }
-
-// --- Disk cache plumbing (blocking FS off the async workers) ---

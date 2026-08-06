@@ -3,13 +3,14 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{rfc3339_from_now, simple_json, TestProxy, OLD, SHA, SIMPLE_CTYPE, TOO_NEW};
 
 const JSON_ACCEPT: &[(&str, &str)] = &[("accept", SIMPLE_CTYPE)];
 
 #[tokio::test]
 async fn too_new_file_dropped_from_json_and_html() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     let body = simple_json(
         "foo",
         &[
@@ -38,7 +39,7 @@ async fn too_new_file_dropped_from_json_and_html() {
 
 #[tokio::test]
 async fn upload_time_at_cutoff_boundary_is_kept() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     // Exactly one cooldown old == at the cutoff -> kept (only strictly newer drops).
     let at_cutoff = rfc3339_from_now(-86_400);
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", &at_cutoff, SHA)]);
@@ -56,7 +57,7 @@ async fn upload_time_at_cutoff_boundary_is_kept() {
 
 #[tokio::test]
 async fn just_inside_cooldown_is_dropped() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     // One hour inside the window -> dropped.
     let inside = rfc3339_from_now(-86_400 + 3_600);
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", &inside, SHA)]);
@@ -74,7 +75,7 @@ async fn just_inside_cooldown_is_dropped() {
 
 #[tokio::test]
 async fn cooldown_off_keeps_everything() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json(
         "foo",
         &[
@@ -99,7 +100,7 @@ async fn missing_upload_time_dropped_only_under_cooldown() {
     // Empty upload-time in the fixture omits the key entirely.
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", "", SHA)]);
 
-    let gated = TestProxy::builder().cooldown_days(1).start().await;
+    let gated = TestProxy::builder().cooldown_days(1).start_proxy().await;
     gated.mock_simple("foo", &body, "\"e1\"").await;
     let doc: serde_json::Value = gated
         .get_simple("foo", JSON_ACCEPT)
@@ -109,7 +110,7 @@ async fn missing_upload_time_dropped_only_under_cooldown() {
         .unwrap();
     assert!(doc["files"].as_array().unwrap().is_empty());
 
-    let open = TestProxy::builder().start().await;
+    let open = TestProxy::builder().start_proxy().await;
     open.mock_simple("foo", &body, "\"e1\"").await;
     let doc: serde_json::Value = open
         .get_simple("foo", JSON_ACCEPT)
@@ -122,7 +123,7 @@ async fn missing_upload_time_dropped_only_under_cooldown() {
 
 #[tokio::test]
 async fn version_survives_through_old_wheel_when_sdist_is_new() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     let body = simple_json(
         "foo",
         &[
@@ -146,7 +147,7 @@ async fn version_survives_through_old_wheel_when_sdist_is_new() {
 
 #[tokio::test]
 async fn identical_serves_hit_upstream_once() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
 
@@ -173,7 +174,7 @@ async fn identical_serves_hit_upstream_once() {
 
 #[tokio::test]
 async fn plus_offset_upload_time_still_parses() {
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     // `+00:00` instead of `Z`: must parse (and pass the gate), not fail closed.
     let body = simple_json(
         "foo",
@@ -195,7 +196,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
     // Regression: the marker carries the cutoff bucket, so a client holding a
     // copy filtered at an earlier bucket is re-served — otherwise files that
     // aged past the cooldown would stay invisible to it indefinitely.
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
     proxy.mock_simple_304("foo", "\"e1\"").await;

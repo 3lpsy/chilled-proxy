@@ -75,15 +75,6 @@ fn accept_header(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::ACCEPT).and_then(|v| v.to_str().ok())
 }
 
-/// The source-content validator used as a memo key and for the weak ETag.
-pub(super) fn entry_validator(entry: &PypiEntry) -> String {
-    entry
-        .etag()
-        .map(ToOwned::to_owned)
-        .or_else(|| entry.last_modified())
-        .unwrap_or_default()
-}
-
 /// The marked, format-tagged client-facing ETag for a served body. Bodies are
 /// always rewritten, so the bare upstream validator is never exposed.
 fn marked_etag(upstream_etag: &str, config: &Config, name: &str, fmt: Format) -> String {
@@ -99,10 +90,47 @@ fn project_not_modified(entry: &PypiEntry, config: &Config, name: &str, fmt: For
     let mut builder = Response::builder()
         .status(304)
         .header(header::VARY, "Accept");
-    if let Some(etag) = entry.etag() {
+    if let Some(etag) = entry.meta.etag() {
         builder = builder.header(header::ETAG, marked_etag(etag, config, name, fmt));
     }
     builder.body(Body::empty()).expect("valid 304 response")
+}
+
+/// Builds the `200 OK` around an already-produced (filtered + rewritten) body.
+fn project_response(
+    entry: &PypiEntry,
+    body: Bytes,
+    config: &Config,
+    name: &str,
+    fmt: Format,
+) -> Response {
+    let mut builder = Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, fmt.ctype())
+        .header(header::VARY, "Accept");
+    if let Some(etag) = entry.meta.etag() {
+        builder = builder.header(header::ETAG, marked_etag(etag, config, name, fmt));
+    }
+    builder
+        .body(Body::from(body))
+        .expect("valid index response")
+}
+
+/// Serves the memoized body for `entry` in the negotiated representation
+/// without touching the disk cache — `None` on a memo miss.
+fn project_memo_hit(
+    entry: &PypiEntry,
+    state: &AppState,
+    name: &str,
+    fmt: Format,
+) -> Option<Response> {
+    let bucket = state
+        .config
+        .cutoff_for(name)
+        .map_or(0, |c| c / MEMO_BUCKET_SECS);
+    let memo_key = format!("{name}.{}", fmt.tag());
+    let body = state.memo.get(&memo_key, &entry.meta.validator(), bucket)?;
+    Some(project_response(entry, body, &state.config, name, fmt))
 }
 
 /// Builds a project-index `200 OK`, filtering + rewriting (and memoizing) the
@@ -117,7 +145,7 @@ pub(super) async fn project_ok(
     let config = &state.config;
     let cutoff = config.cutoff_for(name);
     let bucket = cutoff.map_or(0, |c| c / MEMO_BUCKET_SECS);
-    let validator = entry_validator(entry);
+    let validator = entry.meta.validator();
     let memo_key = format!("{name}.{}", fmt.tag());
 
     let body = if let Some(cached) = state.memo.get(&memo_key, &validator, bucket) {
@@ -151,16 +179,7 @@ pub(super) async fn project_ok(
         }
     };
 
-    let mut builder = Response::builder()
-        .status(200)
-        .header(header::CONTENT_TYPE, fmt.ctype())
-        .header(header::VARY, "Accept");
-    if let Some(etag) = entry.etag() {
-        builder = builder.header(header::ETAG, marked_etag(etag, config, name, fmt));
-    }
-    builder
-        .body(Body::from(body))
-        .expect("valid index response")
+    project_response(entry, body, config, name, fmt)
 }
 
 /// Reads the cached pristine simple index off the blocking thread pool.
@@ -191,6 +210,9 @@ pub(super) async fn cache_find_simple(dir: &Path, name: &str) -> Option<PypiEntr
         .flatten()
 }
 
+/// Fetches a project index from upstream (or stale cache) and serves it.
+///
+/// `window_ok` indicates the client's cached copy was filtered at the same
 /// cooldown window *and* representation we serve now; only then is a 304 safe.
 async fn forward_project(
     state: &AppState,
@@ -261,7 +283,7 @@ async fn forward_project(
             cache_write_simple(&state.config.simple_dir, &response.entry, &response.data).await;
             state.metadata.store(name, response.entry.clone());
 
-            if window_ok && response.entry.is_equivalent(&entry) {
+            if window_ok && response.entry.meta.is_equivalent(&entry.meta) {
                 project_not_modified(&response.entry, &state.config, name, fmt)
             } else {
                 project_ok(&response.entry, response.data, state, name, fmt).await
@@ -271,8 +293,11 @@ async fn forward_project(
             debug!("fetch: cached simple index for {name} is up to date");
             state.metadata.store(name, response.entry.clone());
 
-            if window_ok && response.entry.is_equivalent(&entry) {
+            if window_ok && response.entry.meta.is_equivalent(&entry.meta) {
                 project_not_modified(&response.entry, &state.config, name, fmt)
+            } else if let Some(resp) = project_memo_hit(&response.entry, state, name, fmt) {
+                // A memo hit needs no pristine body: skip the disk read.
+                resp
             } else if let Some(data) = cache_read_simple(&state.config.simple_dir, name).await {
                 project_ok(&response.entry, data, state, name, fmt).await
             } else {
@@ -280,6 +305,23 @@ async fn forward_project(
                 state.metadata.invalidate(name);
                 error_response(503)
             }
+        }
+        code if (500..=599).contains(&code) => {
+            // Upstream trouble: a cached copy beats failing the install. 4xx
+            // stays forwarded — a 404 is a real answer, not an outage.
+            if let Some(data) = cache_read_simple(&state.config.simple_dir, name).await {
+                warn!("proxy: upstream returned HTTP {code} for {name}; serving cached index");
+                let stale = cache_find_simple(&state.config.simple_dir, name)
+                    .await
+                    .unwrap_or_else(|| PypiEntry::new(name));
+                return project_ok(&stale, data, state, name, fmt).await;
+            }
+            warn!("fetch: upstream returned HTTP status {code} for {name}");
+            text_response(
+                code,
+                TEXT_CTYPE,
+                String::from_utf8_lossy(&response.data).into_owned(),
+            )
         }
         code => {
             // Forward other upstream statuses (e.g. 404) verbatim.
@@ -306,7 +348,7 @@ pub(super) async fn serve_project(state: &AppState, name: &str, headers: &Header
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
     {
-        entry.set_etag(&unmark_etag(inm));
+        entry.meta.set_etag(&unmark_etag(inm));
         client_marker = etag_marker(inm);
         client_fmt = etag_format(inm);
     }
@@ -315,14 +357,23 @@ pub(super) async fn serve_project(state: &AppState, name: &str, headers: &Header
 
     // Serve from cache when the metadata cache is warm and unexpired.
     if let Some(cached_entry) = state.metadata.fetch(name) {
-        if cached_entry.is_expired_with_ttl(&state.config.settings.cache_ttl) {
+        if cached_entry
+            .meta
+            .is_expired_with_ttl(&state.config.settings.cache_ttl)
+        {
             debug!("proxy: simple cache expired for {name}, refreshing...");
             return forward_project(state, entry, Some(cached_entry), name, window_ok, fmt).await;
         }
 
-        if window_ok && cached_entry.is_equivalent(&entry) {
+        if window_ok && cached_entry.meta.is_equivalent(&entry.meta) {
             debug!("proxy: simple metadata cache hit for {name}");
             return project_not_modified(&cached_entry, &state.config, name, fmt);
+        }
+
+        // A memo hit needs no pristine body, so skip the disk read entirely.
+        if let Some(response) = project_memo_hit(&cached_entry, state, name, fmt) {
+            debug!("proxy: simple memo hit for {name}");
+            return response;
         }
 
         if let Some(data) = cache_read_simple(&state.config.simple_dir, name).await {
@@ -334,23 +385,4 @@ pub(super) async fn serve_project(state: &AppState, name: &str, headers: &Header
     // Recreate metadata from the cache file mtime, then fetch from upstream.
     let mtimed_entry = cache_find_simple(&state.config.simple_dir, name).await;
     forward_project(state, entry, mtimed_entry, name, window_ok, fmt).await
-}
-
-/// Whether this file may be downloaded under `--restrict-downloads`.
-///
-/// The file's `upload-time` is read from the locally cached *pristine* simple
-/// index. **Fail-closed**: no cached index, unknown filename, or a too-new
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn entry_validator_prefers_etag() {
-        let mut entry = PypiEntry::new("requests");
-        assert_eq!(entry_validator(&entry), "");
-        entry.set_last_modified("Sun, 06 Nov 1994 08:49:37 GMT");
-        assert_eq!(entry_validator(&entry), "Sun, 06 Nov 1994 08:49:37 GMT");
-        entry.set_etag("\"abc\"");
-        assert_eq!(entry_validator(&entry), "\"abc\"");
-    }
 }

@@ -1,83 +1,12 @@
 //! Top-level surface of the unified binary: `/`, `/healthz`, `/metrics`
 //! (gated), registry mounting, and --disable-* flags.
 
-use clap::Parser;
+mod common;
+
+use common::TestApp;
 use serde_json::Value;
-use tempfile::TempDir;
 use wiremock::matchers::{method, path as match_path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// A running full app (all registries) + mock upstream + temp cache dir.
-struct TestApp {
-    base_url: String,
-    mock_upstream: MockServer,
-    client: reqwest::Client,
-    _tmp: TempDir,
-}
-
-impl TestApp {
-    /// Starts the full app with `extra` CLI args appended to safe defaults.
-    async fn start(extra: &[&str]) -> TestApp {
-        let mock_upstream = MockServer::start().await;
-        let tmp = TempDir::new().unwrap();
-        let upstream = format!("{}/", mock_upstream.uri());
-
-        let mut argv = vec![
-            "chilled-proxy".to_string(),
-            "--cache-dir".into(),
-            tmp.path().to_string_lossy().into_owned(),
-            "--crates-index-url".into(),
-            upstream.clone(),
-            "--crates-upstream-url".into(),
-            upstream.clone(),
-            "--npm-upstream-url".into(),
-            upstream.clone(),
-            "--pypi-upstream-url".into(),
-            upstream.clone(),
-            "--pypi-files-url".into(),
-            upstream.clone(),
-            "--maven-upstream-url".into(),
-            upstream.clone(),
-        ];
-        argv.extend(extra.iter().map(|s| s.to_string()));
-
-        let cli = chilled_proxy::cli::Cli::try_parse_from(argv).unwrap();
-        let app = chilled_proxy::build_app(&cli);
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(chilled_core::serve::serve_listener(listener, app));
-
-        let client = reqwest::Client::new();
-        let base_url = format!("http://{addr}");
-        for _ in 0..100 {
-            if client
-                .get(format!("{base_url}/healthz"))
-                .send()
-                .await
-                .is_ok()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-
-        TestApp {
-            base_url,
-            mock_upstream,
-            client,
-            _tmp: tmp,
-        }
-    }
-
-    async fn get(&self, path: &str) -> reqwest::Response {
-        self.client
-            .get(format!("{}{}", self.base_url, path))
-            .send()
-            .await
-            .expect("request")
-    }
-}
+use wiremock::{Mock, ResponseTemplate};
 
 #[tokio::test]
 async fn home_reports_running_and_mounted_registries() {
@@ -150,7 +79,7 @@ async fn metrics_lists_cached_crate_after_download() {
     Mock::given(method("GET"))
         .and(match_path("/api/v1/crates/serde/1.0.0/download"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"crate-bytes".to_vec()))
-        .mount(&app.mock_upstream)
+        .mount(app.mock_upstream.as_ref().unwrap())
         .await;
 
     // Populate the crates cache through the mounted registry.
@@ -226,6 +155,8 @@ async fn registries_serve_under_custom_mounts() {
     assert_eq!(app.get("/registry/npm/lodash").await.status(), 404);
     assert!(!app
         .mock_upstream
+        .as_ref()
+        .unwrap()
         .received_requests()
         .await
         .unwrap()

@@ -62,20 +62,28 @@ pub(crate) fn list_versions(xml: &[u8]) -> Result<Vec<String>, String> {
 /// Filters pristine metadata against the sidecar ages: versions with
 /// `ts > cutoff` (or unknown age) are dropped. Returns `None` when nothing
 /// survives. The XML declaration and untouched elements are preserved.
+///
+/// `versions` is the document's own version list ([`list_versions`] of the
+/// same bytes) — passed in so the caller's parse is not repeated here.
 pub(crate) fn filter_metadata(
     xml: &[u8],
+    versions: &[String],
     times: &VersionTimes,
     cutoff: u64,
 ) -> Result<Option<Vec<u8>>, String> {
-    let versions = list_versions(xml)?;
     if versions.is_empty() {
         // Group-level (plugin-prefix) metadata carries no <versions> to gate;
         // filtering it to a 404 would break plugin-prefix resolution.
         return Ok(Some(xml.to_vec()));
     }
-    let survivors: Vec<(String, u64)> = versions
-        .into_iter()
-        .filter_map(|v| times.get(&v).filter(|ts| *ts <= cutoff).map(|ts| (v, ts)))
+    let survivors: Vec<(&str, u64)> = versions
+        .iter()
+        .filter_map(|v| {
+            times
+                .get(v)
+                .filter(|ts| *ts <= cutoff)
+                .map(|ts| (v.as_str(), ts))
+        })
         .collect();
     if survivors.is_empty() {
         return Ok(None);
@@ -84,14 +92,15 @@ pub(crate) fn filter_metadata(
     let latest = survivors
         .iter()
         .max_by_key(|(_, ts)| *ts)
-        .map(|(v, _)| v.clone())
+        .map(|(v, _)| (*v).to_owned())
         .expect("survivors are non-empty");
     let release = survivors
         .iter()
         .filter(|(v, _)| !v.ends_with("-SNAPSHOT"))
         .max_by_key(|(_, ts)| *ts)
-        .map(|(v, _)| v.clone());
-    let keep = |v: &str| survivors.iter().any(|(s, _)| s == v);
+        .map(|(v, _)| (*v).to_owned());
+    let keep_set: std::collections::HashSet<&str> = survivors.iter().map(|(v, _)| *v).collect();
+    let keep = |v: &str| keep_set.contains(v);
 
     let mut reader = Reader::from_reader(xml);
     let mut buf = Vec::new();

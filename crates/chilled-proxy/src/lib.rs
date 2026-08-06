@@ -8,6 +8,7 @@
 pub(crate) mod auth;
 pub mod cli;
 pub(crate) mod constants;
+pub mod kind;
 pub(crate) mod mount;
 pub(crate) mod routes;
 pub(crate) mod spec;
@@ -26,8 +27,9 @@ use log::info;
 use url::Url;
 
 use crate::auth::UpstreamAuth;
-use crate::cli::{Cli, RegistryInstance};
-use crate::constants::{HTTP_USER_AGENT, REGISTRY_IDS};
+use crate::cli::{Cli, RegistryInstance, ResolvedConfig};
+use crate::constants::HTTP_USER_AGENT;
+use crate::kind::RegistryKind;
 use crate::routes::{handle_healthz, handle_home, handle_metrics, MountedRegistry, TopState};
 
 /// Builds an upstream HTTP client carrying a mount's credentials and headers.
@@ -38,7 +40,10 @@ use crate::routes::{handle_healthz, handle_home, handle_metrics, MountedRegistry
 fn http_client(auth: &UpstreamAuth) -> reqwest::Client {
     let mut builder = reqwest::Client::builder()
         .user_agent(HTTP_USER_AGENT)
-        .connect_timeout(Duration::from_secs(30));
+        .connect_timeout(Duration::from_secs(30))
+        // Per-read, not per-request: a stalled upstream is dropped without
+        // capping how long a large-but-progressing download may take.
+        .read_timeout(Duration::from_secs(60));
     if !auth.is_empty() {
         builder = builder.default_headers(auth.headers().clone());
     }
@@ -61,28 +66,35 @@ fn build_registry(instance: &RegistryInstance, client: &reqwest::Client) -> Arc<
     };
 
     match instance.kind {
-        "crates" => {
-            let config = crates_proxy::Config::new(second("index"), upstream, settings);
+        RegistryKind::Crates => {
+            let config = crates_proxy::Config::new(
+                crates_proxy::Upstreams {
+                    index: second("index"),
+                    download: upstream,
+                },
+                settings,
+            );
             Arc::new(crates_proxy::CratesProxy::new(config, client.clone()))
         }
-        "npm" => {
+        RegistryKind::Npm => {
             let config = npm_proxy::Config::new(upstream, settings);
             Arc::new(npm_proxy::NpmProxy::new(config, client.clone()))
         }
-        "pypi" => {
-            let config = pypi_proxy::Config::with_file_hosts(
-                upstream,
-                second("files"),
+        RegistryKind::Pypi => {
+            let config = pypi_proxy::Config::new(
+                pypi_proxy::Upstreams {
+                    simple: upstream,
+                    files: second("files"),
+                },
                 settings,
                 &instance.file_hosts,
             );
             Arc::new(pypi_proxy::PypiProxy::new(config, client.clone()))
         }
-        "maven" => {
+        RegistryKind::Maven => {
             let config = maven_proxy::Config::new(upstream, settings);
             Arc::new(maven_proxy::MavenProxy::new(config, client.clone()))
         }
-        other => unreachable!("unknown registry id: {other}"),
     }
 }
 
@@ -108,13 +120,11 @@ pub(crate) fn build_registries(instances: &[RegistryInstance]) -> Vec<MountedReg
 }
 
 /// Builds the full application router: every enabled registry nested under its
-/// prefix, plus the top-level status surface.
-pub fn build_app(cli: &Cli) -> Router {
-    let instances = cli
-        .instances()
-        .expect("mounts are validated before the app is built");
+/// prefix, plus the top-level status surface. Infallible: the configuration
+/// was already resolved and validated.
+pub fn build_app(config: &ResolvedConfig) -> Router {
     let state = TopState {
-        registries: Arc::new(build_registries(&instances)),
+        registries: Arc::new(build_registries(&config.instances)),
     };
 
     let mut top = Router::new()
@@ -122,14 +132,14 @@ pub fn build_app(cli: &Cli) -> Router {
         .route("/healthz", get(handle_healthz));
 
     // The metrics endpoint is only routed when enabled; otherwise it 404s.
-    if cli.enable_metrics {
+    if config.enable_metrics {
         top = top.route("/metrics", get(handle_metrics));
     }
 
     // Registry routers carry their own state; apply ours before mounting them.
     let mut app = top.with_state(state.clone());
     let mut root_mounted = false;
-    for (instance, mounted) in instances.iter().zip(state.registries.iter()) {
+    for (instance, mounted) in config.instances.iter().zip(state.registries.iter()) {
         if instance.path == "/" {
             // axum refuses `nest("/")`; merging keeps the top-level routes and
             // hands everything else to the registry's own fallback.
@@ -160,13 +170,11 @@ fn redacted(url: &Url) -> String {
 }
 
 /// Logs the effective configuration. Call *after* the logger is initialized.
-fn log_startup(cli: &Cli, instances: &[RegistryInstance]) {
-    for id in REGISTRY_IDS {
-        if !cli.is_enabled(id) {
-            info!("proxy: registry {id} disabled at its default mount");
-        }
+fn log_startup(config: &ResolvedConfig) {
+    for kind in &config.disabled {
+        info!("proxy: registry {kind} disabled at its default mount");
     }
-    for instance in instances {
+    for instance in &config.instances {
         let name = &instance.name;
         let s = &instance.settings;
         info!(
@@ -177,6 +185,12 @@ fn log_startup(cli: &Cli, instances: &[RegistryInstance]) {
             s.proxy_url,
             s.cache_dir.to_string_lossy()
         );
+        // The secondary URL (sparse index / file host) is exactly the setting
+        // that can silently resolve wrong, so make it visible.
+        if let Some(secondary) = &instance.secondary {
+            let what = instance.kind.secondary_key().unwrap_or("secondary");
+            info!("proxy: {name}: {what} upstream {}", redacted(secondary));
+        }
         if let Some(auth) = instance.auth.describe() {
             info!("proxy: {name}: upstream auth: {auth}");
         }
@@ -197,7 +211,7 @@ fn log_startup(cli: &Cli, instances: &[RegistryInstance]) {
     }
     info!(
         "metrics: /metrics endpoint {}",
-        if cli.enable_metrics {
+        if config.enable_metrics {
             "enabled"
         } else {
             "disabled"
@@ -205,8 +219,9 @@ fn log_startup(cli: &Cli, instances: &[RegistryInstance]) {
     );
 }
 
-/// The binary entry point: parse the environment + CLI, initialize logging, and
-/// serve until the process is killed.
+/// The binary entry point: parse the environment + CLI, resolve the
+/// configuration once, initialize logging, and serve until the process is
+/// killed.
 pub async fn run() {
     let cli = Cli::parse();
 
@@ -215,20 +230,22 @@ pub async fn run() {
         return;
     }
 
-    // Parses the mount specs as well, so a bad one is reported before binding.
-    if let Err(err) = cli.check_mounts() {
-        eprintln!("error: {err}");
-        std::process::exit(2);
-    }
-    let instances = cli.instances().expect("mounts were just validated");
+    // One resolution covers everything: mount-spec syntax, layout validation,
+    // and upstream auth — a bad config is reported before binding.
+    let config = match cli.resolve() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("error: {err}");
+            std::process::exit(2);
+        }
+    };
 
     // Initialize logging (stdout) before emitting any configuration logs.
-    LogBuilder::from_env(LogEnv::new().default_filter_or(cli.resolved_log_level().as_str()))
+    LogBuilder::from_env(LogEnv::new().default_filter_or(config.log_level.as_str()))
         .target(env_logger::Target::Stdout)
         .init();
-    log_startup(&cli, &instances);
+    log_startup(&config);
 
-    let listen = cli.listen_address();
-    let app = build_app(&cli);
-    serve(listen, app).await;
+    let app = build_app(&config);
+    serve(config.listen, app).await;
 }

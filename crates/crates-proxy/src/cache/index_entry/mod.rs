@@ -5,21 +5,16 @@ mod tests;
 
 use std::fmt::{Display, Formatter, Result};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
 
-use chilled_core::http::{fmt_http_date, parse_http_date};
+use chilled_core::cache::CacheEntry;
 
 /// Registry index entry structure
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct IndexEntry {
     /// Crate name
     name: String,
-    /// HTTP entity tag header
-    etag: Option<String>,
-    /// Index file modification time
-    mtime: Option<SystemTime>,
-    /// Last index entry update check time
-    atime: Option<Instant>,
+    /// Cached response metadata (HTTP validators and freshness).
+    pub(crate) meta: CacheEntry,
 }
 
 impl Display for IndexEntry {
@@ -34,9 +29,7 @@ impl IndexEntry {
     pub(crate) fn new(name: &str) -> Self {
         IndexEntry {
             name: name.to_owned(),
-            etag: None,
-            mtime: None,
-            atime: None,
+            meta: CacheEntry::new(),
         }
     }
 
@@ -66,58 +59,6 @@ impl IndexEntry {
     #[must_use]
     pub(crate) fn name(&self) -> &str {
         &self.name
-    }
-
-    /// Checks if this index entry file contents is the same
-    /// as `other` according to the associated metadata.
-    #[must_use]
-    pub(crate) fn is_equivalent(&self, other: &IndexEntry) -> bool {
-        (self.etag().is_some() && (self.etag() == other.etag()))
-            || (self.last_modified().is_some() && (self.last_modified() == other.last_modified()))
-    }
-
-    /// Checks if this index entry is expired according for the TTL given.
-    #[must_use]
-    pub(crate) fn is_expired_with_ttl(&self, ttl: &Duration) -> bool {
-        self.atime.is_some_and(|atime| atime.elapsed() > *ttl)
-    }
-
-    /// Gets the HTTP entity tag metadata.
-    #[must_use]
-    pub(crate) fn etag(&self) -> Option<&str> {
-        self.etag.as_deref()
-    }
-
-    /// Gets the HTTP Last-Modified metadata.
-    #[must_use]
-    pub(crate) fn last_modified(&self) -> Option<String> {
-        self.mtime.map(fmt_http_date)
-    }
-
-    /// Gets the file modification time metadata.
-    #[must_use]
-    pub(crate) fn mtime(&self) -> Option<SystemTime> {
-        self.mtime
-    }
-
-    /// Sets the HTTP entity tag metadata.
-    pub(crate) fn set_etag(&mut self, etag: &str) {
-        self.etag = Some(etag.to_owned());
-    }
-
-    /// Sets the HTTP Last-Modified metadata.
-    pub(crate) fn set_last_modified(&mut self, last_modified: &str) {
-        self.mtime = parse_http_date(last_modified);
-    }
-
-    /// Sets the file modification time metadata.
-    pub(crate) fn set_mtime(&mut self, mtime: SystemTime) {
-        self.mtime = Some(mtime);
-    }
-
-    /// Updates the last upstream server access time metadata.
-    pub(crate) fn set_last_updated(&mut self) {
-        self.atime = Some(Instant::now());
     }
 
     /// Builds the index entry download URL (relative).

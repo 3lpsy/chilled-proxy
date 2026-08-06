@@ -9,7 +9,7 @@ use axum::{
 use bytes::Bytes;
 use chilled_core::cache::MEMO_BUCKET_SECS;
 use chilled_core::etag::{etag_marker, filtered_etag, rewrite_etag, unmark_etag, Marker};
-use chilled_core::http::{error_response, json_response, read_capped, FetchError};
+use chilled_core::http::{conditional_get, error_response, json_response, FetchError};
 use log::{debug, error, info, warn};
 
 use crate::constants::PACKUMENT_CTYPE;
@@ -39,15 +39,6 @@ pub(super) struct PackumentResponse {
     pub(super) status: u16,
     /// Upstream HTTP response body.
     pub(super) data: Vec<u8>,
-}
-
-/// The source-content validator used as a memo key and for the weak ETag.
-fn entry_validator(entry: &NpmEntry) -> String {
-    entry
-        .etag()
-        .map(ToOwned::to_owned)
-        .or_else(|| entry.last_modified())
-        .unwrap_or_default()
 }
 
 /// Attaches the cooldown-aware ETag. Served bodies are always rewritten, so
@@ -137,6 +128,12 @@ async fn serve_packument(
             return Served::NotModified(cached_entry);
         }
 
+        // A memo hit needs no pristine body, so skip the disk read entirely.
+        if let Some(served) = memoized_served(state, pkg, &cached_entry) {
+            debug!("proxy: packument memo hit for {name}");
+            return served;
+        }
+
         if let Some(data) = cache_read_packument(state, pkg).await {
             debug!("proxy: packument data cache hit for {name}");
             return filtered_served(state, pkg, cached_entry, data).await;
@@ -199,6 +196,9 @@ async fn forward_packument(
 
             if window_ok && response.entry.is_equivalent(&client_entry) {
                 Served::NotModified(response.entry)
+            } else if let Some(served) = memoized_served(state, pkg, &response.entry) {
+                // A memo hit needs no pristine body: skip the disk read.
+                served
             } else if let Some(data) = cache_read_packument(state, pkg).await {
                 filtered_served(state, pkg, response.entry, data).await
             } else {
@@ -206,6 +206,20 @@ async fn forward_packument(
                 state.metadata.invalidate(&pkg.full_name());
                 Served::Done(error_response(503))
             }
+        }
+        code if (500..=599).contains(&code) => {
+            // Upstream trouble: a cached copy beats failing the install. 4xx
+            // stays forwarded — a 404 is a real answer, not an outage.
+            if let Some(data) = cache_read_packument(state, pkg).await {
+                warn!("proxy: upstream returned HTTP {code} for {pkg}; serving cached packument");
+                let stale = cache_find_packument(state, pkg).await.unwrap_or_default();
+                return filtered_served(state, pkg, stale, data).await;
+            }
+            warn!("fetch: upstream returned HTTP status {code} for {pkg}");
+            Served::Done(json_response(
+                code,
+                String::from_utf8_lossy(&response.data).into_owned(),
+            ))
         }
         code => {
             // Forward other upstream statuses (e.g. 404) verbatim.
@@ -218,6 +232,18 @@ async fn forward_packument(
     }
 }
 
+/// The memoized filtered+rewritten body for `entry`, served without touching
+/// the disk cache — `None` on a memo miss.
+fn memoized_served(state: &AppState, pkg: &PackageRef, entry: &NpmEntry) -> Option<Served> {
+    let name = pkg.full_name();
+    let bucket = state
+        .config
+        .cutoff_for(&name)
+        .map_or(0, |c| c / MEMO_BUCKET_SECS);
+    let body = state.memo.get(&name, &entry.validator(), bucket)?;
+    Some(Served::Body(entry.clone(), body))
+}
+
 /// Filters+rewrites pristine packument bytes (memoized) into a serve outcome.
 async fn filtered_served(
     state: &AppState,
@@ -228,7 +254,7 @@ async fn filtered_served(
     let name = pkg.full_name();
     let cutoff = state.config.cutoff_for(&name);
     let bucket = cutoff.map_or(0, |c| c / MEMO_BUCKET_SECS);
-    let validator = entry_validator(&entry);
+    let validator = entry.validator();
 
     if let Some(cached) = state.memo.get(&name, &validator, bucket) {
         return Served::Body(entry, cached);
@@ -280,43 +306,20 @@ pub(super) async fn download_packument(
         .expect("validated packument URL");
 
     // Full doc only — the abbreviated "corgi" form lacks the `time` map needed
-    // for cooldown; identity encoding because we parse the body.
-    let mut request = state
-        .client
-        .get(url)
-        .header(header::ACCEPT, PACKUMENT_CTYPE)
-        .header(header::ACCEPT_ENCODING, "identity");
-    if let Some(etag) = entry.etag() {
-        request = request.header(header::IF_NONE_MATCH, etag);
-    } else if let Some(last_modified) = entry.last_modified() {
-        request = request.header(header::IF_MODIFIED_SINCE, last_modified);
-    }
-
-    let mut response = request.send().await.map_err(FetchError::Http)?;
-    let status = response.status().as_u16();
-
-    if let Some(etag) = response
-        .headers()
-        .get(header::ETAG)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_etag(etag);
-    }
-    if let Some(last_modified) = response
-        .headers()
-        .get(header::LAST_MODIFIED)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_last_modified(last_modified);
-    }
-    entry.set_last_updated();
-
-    let data = read_capped(&mut response, state.config.settings.max_metadata_size).await?;
+    // for cooldown.
+    let response = conditional_get(
+        &state.client,
+        url,
+        Some(PACKUMENT_CTYPE),
+        &mut entry,
+        state.config.settings.max_metadata_size,
+    )
+    .await?;
 
     Ok(PackumentResponse {
         entry,
-        status,
-        data,
+        status: response.status,
+        data: response.data,
     })
 }
 
@@ -361,5 +364,3 @@ fn extract_version_doc(body: &[u8], version: &str) -> Option<String> {
     })?;
     serde_json::to_string(entry).ok()
 }
-
-// --- Tarballs ---

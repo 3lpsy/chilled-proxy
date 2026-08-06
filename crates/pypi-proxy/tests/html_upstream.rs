@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{simple_html, TestProxy, OLD, SHA, SIMPLE_CTYPE, TOO_NEW};
 
 /// The content type an HTML-only upstream answers with.
@@ -16,7 +17,7 @@ const HTML_ACCEPT: &[(&str, &str)] = &[("accept", "text/html")];
 async fn html_proxy(cooldown_days: u64, files: &[(&str, &str, &str)]) -> TestProxy {
     let proxy = TestProxy::builder()
         .cooldown_days(cooldown_days)
-        .start()
+        .start_proxy()
         .await;
     let body = simple_html("foo", files);
     proxy
@@ -145,7 +146,7 @@ async fn a_downloaded_file_from_an_html_index_is_gated_and_cached() {
     let proxy = TestProxy::builder()
         .cooldown_days(1)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let body = simple_html(
         "foo",
@@ -174,7 +175,7 @@ async fn a_downloaded_file_from_an_html_index_is_gated_and_cached() {
 async fn a_non_index_body_is_still_refused_under_cooldown() {
     // Normalizing HTML must not weaken the guarantee for bodies that are
     // neither JSON nor HTML.
-    let proxy = TestProxy::builder().cooldown_days(1).start().await;
+    let proxy = TestProxy::builder().cooldown_days(1).start_proxy().await;
     proxy
         .mock_simple_ctype("foo", "not an index", "\"e1\"", "application/octet-stream")
         .await;

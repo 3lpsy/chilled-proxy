@@ -9,6 +9,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::TestProxy;
 
 /// Simple-index vectors that must be rejected without contacting upstream.
@@ -41,7 +42,7 @@ fn file_vectors() -> Vec<String> {
 
 #[tokio::test]
 async fn simple_injection_vectors_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     for path in simple_vectors() {
         let resp = proxy.get_no_redirect(&path).await;
         assert_eq!(resp.status(), 404, "path: {path}");
@@ -52,7 +53,7 @@ async fn simple_injection_vectors_are_rejected() {
 
 #[tokio::test]
 async fn file_injection_vectors_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     for path in file_vectors() {
         let resp = proxy.get_no_redirect(&path).await;
         assert_eq!(resp.status(), 404, "path: {path}");
@@ -69,7 +70,7 @@ async fn a_clean_path_of_an_unknown_layout_is_forwarded_and_404s() {
     // host's root, or carry a traversal segment — those stay rejected locally,
     // which `file_injection_vectors_are_rejected` and the `validate_fhp_path`
     // unit tests both cover.
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_file_status("f.whl", 404).await;
 
     let resp = proxy.get_no_redirect("/files/foo/whl/cpu/f.whl").await;
@@ -78,7 +79,7 @@ async fn a_clean_path_of_an_unknown_layout_is_forwarded_and_404s() {
 
 #[tokio::test]
 async fn query_and_fragment_are_not_forwarded_upstream() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = common::simple_json("foo", &[("foo-1.0.0.tar.gz", common::OLD, common::SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
 

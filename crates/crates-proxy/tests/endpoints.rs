@@ -3,6 +3,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::TestProxy;
 use serde_json::Value;
 
@@ -10,7 +11,7 @@ use serde_json::Value;
 async fn config_json_points_downloads_at_proxy() {
     let proxy = TestProxy::builder()
         .proxy_url("http://proxy.test/crates/")
-        .start()
+        .start_proxy()
         .await;
 
     let resp = proxy.get_config_json().await;
@@ -27,7 +28,7 @@ async fn config_json_points_downloads_at_proxy() {
 
 #[tokio::test]
 async fn config_json_default_proxy_url_includes_mount() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let json: Value = proxy.get_config_json().await.json().await.unwrap();
     assert_eq!(json["dl"], "http://localhost:3080/crates/api/v1/crates");

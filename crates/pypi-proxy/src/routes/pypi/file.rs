@@ -9,9 +9,9 @@ use serde_json::Value;
 use url::Url;
 
 use crate::constants::{FILE_CTYPE, METADATA_SUFFIX, TEXT_CTYPE};
-use crate::model::{cache_store_simple, PypiEntry};
+use crate::model::PypiEntry;
 use crate::routes::pypi::fetch::{download_simple, is_json_simple};
-use crate::routes::pypi::serve::cache_read_simple;
+use crate::routes::pypi::serve::{cache_read_simple, cache_write_simple};
 use crate::state::AppState;
 use crate::{filter, valid};
 
@@ -29,7 +29,7 @@ async fn lookup_file(state: &AppState, project: &str, filename: &str) -> Option<
         debug!("download: fetching simple index for {project} to resolve {filename}");
         if let Ok(response) = download_simple(state, PypiEntry::new(project)).await {
             if response.status == 200 && is_json_simple(&response.ctype) {
-                cache_store_simple(&state.config.simple_dir, &response.entry, &response.data);
+                cache_write_simple(&state.config.simple_dir, &response.entry, &response.data).await;
                 state.metadata.store(project, response.entry.clone());
                 data = Some(response.data);
             }
@@ -92,8 +92,10 @@ fn upstream_file_url(
         }
         // Substituting is right for a mirrored file host and wrong for a
         // genuinely multi-host index, and only the operator can tell them
-        // apart — so say which host was skipped and how to allow it.
-        debug!(
+        // apart — so say which host was skipped and how to allow it. This is
+        // the misconfiguration signal for a PyTorch-style mount, so it must be
+        // visible at the default log level, not buried in debug.
+        warn!(
             "download: {label}: index names host '{}', not allowed for this mount; \
              falling back to the pinned files URL (allow it with `file-hosts` if this 404s)",
             url.host_str().unwrap_or("?")
@@ -170,7 +172,10 @@ pub(super) async fn serve_file(
         }
     }
 
-    let file_path = state.config.files_dir.join(project).join(filename);
+    // Cache under the full relative path (already segment-validated), not just
+    // the filename: a multi-host index can carry same-named files at different
+    // paths (`whl/cpu/…` vs `whl/cu118/…`) that must not collide.
+    let file_path = state.config.files_dir.join(project).join(fhp_path);
     let cached = {
         let path = file_path.clone();
         tokio::task::spawn_blocking(move || chilled_core::cache::fs::fetch_file(&path))

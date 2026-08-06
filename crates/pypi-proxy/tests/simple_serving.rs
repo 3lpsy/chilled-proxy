@@ -7,13 +7,14 @@ mod common;
 use std::fs;
 use std::time::Duration;
 
+use common::StartProxy;
 use common::{simple_json, TestProxy, OLD, SHA, SIMPLE_CTYPE};
 
 const JSON_ACCEPT: &[(&str, &str)] = &[("accept", SIMPLE_CTYPE)];
 
 #[tokio::test]
 async fn json_accept_serves_json() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
 
@@ -29,7 +30,7 @@ async fn json_accept_serves_json() {
 
 #[tokio::test]
 async fn html_or_absent_accept_serves_html() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
 
@@ -46,7 +47,7 @@ async fn html_or_absent_accept_serves_html() {
 
 #[tokio::test]
 async fn missing_trailing_slash_redirects() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let resp = proxy.get_no_redirect("/simple/requests").await;
     assert_eq!(resp.status(), 301);
@@ -57,7 +58,7 @@ async fn missing_trailing_slash_redirects() {
 
 #[tokio::test]
 async fn project_list_is_served_in_both_formats() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let resp = proxy.get("/simple/").await;
     assert_eq!(resp.status(), 200);
@@ -72,7 +73,7 @@ async fn project_list_is_served_in_both_formats() {
 
 #[tokio::test]
 async fn cold_fetch_caches_pristine_json_on_disk() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
 
@@ -91,7 +92,7 @@ async fn cold_fetch_caches_pristine_json_on_disk() {
 async fn cached_within_ttl_serves_without_upstream() {
     let proxy = TestProxy::builder()
         .cache_ttl(Duration::from_secs(3600))
-        .start()
+        .start_proxy()
         .await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
@@ -115,7 +116,10 @@ async fn cached_within_ttl_serves_without_upstream() {
 
 #[tokio::test]
 async fn expired_ttl_revalidates_with_upstream_304() {
-    let proxy = TestProxy::builder().cache_ttl(Duration::ZERO).start().await;
+    let proxy = TestProxy::builder()
+        .cache_ttl(Duration::ZERO)
+        .start_proxy()
+        .await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
     proxy.mock_simple_304("requests", "\"e1\"").await;
@@ -139,7 +143,7 @@ async fn expired_ttl_revalidates_with_upstream_304() {
 
 #[tokio::test]
 async fn client_304_only_for_matching_format_tag() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("requests", &[("requests-2.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("requests", &body, "\"e1\"").await;
 

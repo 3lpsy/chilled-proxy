@@ -21,6 +21,7 @@ use chilled_core::config;
 use chilled_core::cooldown;
 use url::Url;
 
+use crate::kind::RegistryKind;
 use crate::mount;
 
 /// One parsed mount spec. `None` in a field means "inherit".
@@ -50,17 +51,8 @@ pub(crate) struct MountSpec {
     pub(crate) file_hosts: Vec<String>,
 }
 
-/// The registry-specific second URL key, for registries that have one.
-fn secondary_key(kind: &str) -> Option<&'static str> {
-    match kind {
-        "crates" => Some("index"),
-        "pypi" => Some("files"),
-        _ => None,
-    }
-}
-
 /// The keys `kind` accepts, for error messages.
-fn accepted_keys(kind: &str) -> String {
+fn accepted_keys(kind: RegistryKind) -> String {
     let mut keys = vec![
         "name",
         "path",
@@ -72,17 +64,17 @@ fn accepted_keys(kind: &str) -> String {
         "max-metadata-size",
         "max-artifact-size",
     ];
-    if kind == "pypi" {
+    if kind == RegistryKind::Pypi {
         keys.push("file-hosts");
     }
-    if let Some(key) = secondary_key(kind) {
+    if let Some(key) = kind.secondary_key() {
         keys.insert(3, key);
     }
     keys.join(", ")
 }
 
 /// Parses one `--<kind>-mount` spec.
-pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
+pub(crate) fn parse(kind: RegistryKind, raw: &str) -> Result<MountSpec, String> {
     let err = |msg: String| format!("--{kind}-mount '{raw}': {msg}");
 
     let mut spec = MountSpec {
@@ -179,7 +171,7 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
                 spec.max_artifact_size = Some(config::parse_size(value).map_err(err)?);
             }
             // Space-separated: the comma is already the pair separator.
-            "file-hosts" | "file_hosts" if kind == "pypi" => {
+            "file-hosts" | "file_hosts" if kind == RegistryKind::Pypi => {
                 if !spec.file_hosts.is_empty() {
                     return Err(twice());
                 }
@@ -191,7 +183,7 @@ pub(crate) fn parse(kind: &str, raw: &str) -> Result<MountSpec, String> {
                     return Err(err("file-hosts is empty".to_owned()));
                 }
             }
-            other if secondary_key(kind) == Some(other) => {
+            other if kind.secondary_key() == Some(other) => {
                 if spec.secondary.is_some() {
                     return Err(twice());
                 }

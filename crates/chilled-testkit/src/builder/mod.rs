@@ -148,24 +148,7 @@ impl TestServerBuilder {
             Router::new().nest(&self.prefix, inner)
         };
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind ephemeral port");
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(chilled_core::serve::serve_listener(listener, app));
-
-        let client = reqwest::Client::builder()
-            .build()
-            .expect("build test client");
-        let base_url = format!("http://{addr}");
-
-        // Wait until the server answers anything at all (status is irrelevant).
-        for _ in 0..100 {
-            if client.get(format!("{base_url}/")).send().await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        let (base_url, client) = crate::server::serve_app(app, "/").await;
 
         TestServer::new(mock_upstream, base_url, self.prefix, cache_dir, client, tmp)
     }

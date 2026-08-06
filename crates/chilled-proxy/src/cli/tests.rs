@@ -5,6 +5,7 @@ use clap::Parser;
 use url::Url;
 
 use super::*;
+use crate::kind::RegistryKind;
 
 fn parse(args: &[&str]) -> Cli {
     let mut argv = vec!["chilled-proxy"];
@@ -15,14 +16,17 @@ fn parse(args: &[&str]) -> Cli {
 #[test]
 fn defaults_are_general() {
     let cli = parse(&[]);
-    for id in ["crates", "npm", "pypi", "maven"] {
-        let s = cli.registry_settings(id);
+    for kind in RegistryKind::ALL {
+        let s = cli.registry_settings(kind);
         assert_eq!(s.cooldown, Duration::ZERO);
         assert_eq!(s.cache_ttl, Duration::from_secs(3600));
         assert!(!s.restrict_downloads);
         assert!(s.overrides.is_empty());
-        assert_eq!(s.cache_dir, Path::new("/var/cache/chilled").join(id));
-        assert_eq!(s.proxy_url.as_str(), format!("http://localhost:3080/{id}/"));
+        assert_eq!(s.cache_dir, Path::new("/var/cache/chilled").join(kind.id()));
+        assert_eq!(
+            s.proxy_url.as_str(),
+            format!("http://localhost:3080/{kind}/")
+        );
     }
 }
 
@@ -35,8 +39,8 @@ fn general_flags_apply_to_every_registry() {
         "60",
         "--restrict-downloads",
     ]);
-    for id in ["crates", "npm", "pypi", "maven"] {
-        let s = cli.registry_settings(id);
+    for kind in RegistryKind::ALL {
+        let s = cli.registry_settings(kind);
         assert_eq!(s.cooldown, Duration::from_secs(604_800));
         assert_eq!(s.cache_ttl, Duration::from_secs(60));
         assert!(s.restrict_downloads);
@@ -56,26 +60,35 @@ fn per_registry_flags_override_general() {
         "--restrict-downloads-maven=false",
     ]);
     assert_eq!(
-        cli.registry_settings("crates").cooldown,
+        cli.registry_settings(RegistryKind::Crates).cooldown,
         Duration::from_secs(604_800)
     );
     assert_eq!(
-        cli.registry_settings("npm").cooldown,
+        cli.registry_settings(RegistryKind::Npm).cooldown,
         Duration::from_secs(86_400)
     );
     assert_eq!(
-        cli.registry_settings("pypi").cache_ttl,
+        cli.registry_settings(RegistryKind::Pypi).cache_ttl,
         Duration::from_secs(90)
     );
-    assert!(cli.registry_settings("crates").restrict_downloads);
-    assert!(!cli.registry_settings("maven").restrict_downloads);
+    assert!(
+        cli.registry_settings(RegistryKind::Crates)
+            .restrict_downloads
+    );
+    assert!(
+        !cli.registry_settings(RegistryKind::Maven)
+            .restrict_downloads
+    );
 }
 
 #[test]
 fn restrict_downloads_per_registry_without_value_means_true() {
     let cli = parse(&["--restrict-downloads-npm"]);
-    assert!(cli.registry_settings("npm").restrict_downloads);
-    assert!(!cli.registry_settings("crates").restrict_downloads);
+    assert!(cli.registry_settings(RegistryKind::Npm).restrict_downloads);
+    assert!(
+        !cli.registry_settings(RegistryKind::Crates)
+            .restrict_downloads
+    );
 }
 
 #[test]
@@ -86,9 +99,9 @@ fn per_registry_override_list_replaces_general() {
         "--cooldown-overrides-npm",
         "lodash",
     ]);
-    let crates = cli.registry_settings("crates");
+    let crates = cli.registry_settings(RegistryKind::Crates);
     assert!(crates.overrides.contains("serde") && crates.overrides.contains("tokio"));
-    let npm = cli.registry_settings("npm");
+    let npm = cli.registry_settings(RegistryKind::Npm);
     assert!(npm.overrides.contains("lodash"));
     assert!(!npm.overrides.contains("serde"));
 }
@@ -97,20 +110,63 @@ fn per_registry_override_list_replaces_general() {
 fn proxy_url_gets_trailing_slash_and_derived_default() {
     let cli = parse(&["--npm-proxy-url", "https://proxy.example.com/npm"]);
     assert_eq!(
-        cli.registry_settings("npm").proxy_url.as_str(),
+        cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
         "https://proxy.example.com/npm/"
     );
 
     // Derived default uses the listen port; 0.0.0.0 maps to localhost.
     let cli = parse(&["--listen", "0.0.0.0:9999"]);
     assert_eq!(
-        cli.registry_settings("crates").proxy_url.as_str(),
+        cli.registry_settings(RegistryKind::Crates)
+            .proxy_url
+            .as_str(),
         "http://localhost:9999/crates/"
     );
     let cli = parse(&["--listen", "proxy.lan:8080"]);
     assert_eq!(
-        cli.registry_settings("maven").proxy_url.as_str(),
+        cli.registry_settings(RegistryKind::Maven)
+            .proxy_url
+            .as_str(),
         "http://proxy.lan:8080/maven/"
+    );
+}
+
+#[test]
+fn reverse_proxy_url_derives_every_mount_default() {
+    let cli = parse(&["--reverse-proxy-url", "https://proxy.corp/mirrors"]);
+    assert_eq!(
+        cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
+        "https://proxy.corp/mirrors/npm/"
+    );
+
+    // Extra mounts derive from the same base, keyed by their own path.
+    let cli = parse(&[
+        "--reverse-proxy-url",
+        "https://proxy.corp/",
+        "--maven-mount",
+        "name=plugins",
+    ]);
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
+    let plugins = instances.iter().find(|i| i.name == "plugins").unwrap();
+    assert_eq!(
+        plugins.settings.proxy_url.as_str(),
+        "https://proxy.corp/plugins/"
+    );
+
+    // The per-registry flag still wins for its default mount.
+    let cli = parse(&[
+        "--reverse-proxy-url",
+        "https://proxy.corp/",
+        "--npm-proxy-url",
+        "https://npm.corp/",
+    ]);
+    assert_eq!(
+        cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
+        "https://npm.corp/"
+    );
+    assert_eq!(
+        cli.registry_settings(RegistryKind::Pypi).proxy_url.as_str(),
+        "https://proxy.corp/pypi/"
     );
 }
 
@@ -134,7 +190,7 @@ fn boolean_flags_accept_common_spellings() {
     for truthy in ["1", "true", "yes", "on"] {
         let cli = parse(&[&format!("--restrict-downloads-npm={truthy}")]);
         assert!(
-            cli.registry_settings("npm").restrict_downloads,
+            cli.registry_settings(RegistryKind::Npm).restrict_downloads,
             "value {truthy} should enable"
         );
     }
@@ -144,7 +200,7 @@ fn boolean_flags_accept_common_spellings() {
             &format!("--restrict-downloads-npm={falsy}"),
         ]);
         assert!(
-            !cli.registry_settings("npm").restrict_downloads,
+            !cli.registry_settings(RegistryKind::Npm).restrict_downloads,
             "value {falsy} should disable"
         );
     }
@@ -179,25 +235,25 @@ fn upstream_url_defaults() {
 #[test]
 fn mount_paths_default_to_the_registry_name() {
     let cli = parse(&[]);
-    for id in ["crates", "npm", "pypi", "maven"] {
-        assert_eq!(cli.mount_path(id), format!("/{id}"));
+    for kind in RegistryKind::ALL {
+        assert_eq!(cli.mount_path(kind), format!("/{}", kind.id()));
     }
 }
 
 #[test]
 fn mount_paths_are_configurable_and_normalized() {
     let cli = parse(&["--npm-path", "/registry/npm/", "--maven-path", "/m2"]);
-    assert_eq!(cli.mount_path("npm"), "/registry/npm");
-    assert_eq!(cli.mount_path("maven"), "/m2");
+    assert_eq!(cli.mount_path(RegistryKind::Npm), "/registry/npm");
+    assert_eq!(cli.mount_path(RegistryKind::Maven), "/m2");
     // Untouched registries keep their defaults.
-    assert_eq!(cli.mount_path("crates"), "/crates");
+    assert_eq!(cli.mount_path(RegistryKind::Crates), "/crates");
 }
 
 #[test]
 fn derived_proxy_url_follows_the_mount() {
     let cli = parse(&["--npm-path", "/registry/npm", "--listen", "proxy.lan:8080"]);
     assert_eq!(
-        cli.registry_settings("npm").proxy_url.as_str(),
+        cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
         "http://proxy.lan:8080/registry/npm/"
     );
 
@@ -210,7 +266,7 @@ fn derived_proxy_url_follows_the_mount() {
         "--disable-maven",
     ]);
     assert_eq!(
-        cli.registry_settings("npm").proxy_url.as_str(),
+        cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
         "http://localhost:3080/"
     );
 }
@@ -271,7 +327,7 @@ fn instance<'a>(instances: &'a [RegistryInstance], name: &str) -> &'a RegistryIn
 
 #[test]
 fn default_instances_are_named_after_their_registry() {
-    let instances = parse(&[]).instances().unwrap();
+    let instances = parse(&[]).instances(&crate::auth::ProcessEnv).unwrap();
     let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(
         names,
@@ -286,7 +342,7 @@ fn default_instances_are_named_after_their_registry() {
     );
 
     let maven = instance(&instances, "maven");
-    assert_eq!(maven.kind, "maven");
+    assert_eq!(maven.kind, RegistryKind::Maven);
     assert_eq!(maven.path, "/maven");
     assert_eq!(maven.secondary, None);
     // crates.io and PyPI carry a second URL; npm and Maven do not.
@@ -301,10 +357,10 @@ fn an_extra_mount_gets_its_own_upstream_path_and_cache() {
         "--maven-mount",
         "name=plugins,upstream=https://plugins.gradle.org/m2/",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     let plugins = instance(&instances, "plugins");
 
-    assert_eq!(plugins.kind, "maven");
+    assert_eq!(plugins.kind, RegistryKind::Maven);
     assert_eq!(plugins.upstream.as_str(), "https://plugins.gradle.org/m2/");
     // The path defaults to the name, and the cache directory follows it so two
     // mounts of one registry never share cached artifacts.
@@ -329,7 +385,7 @@ fn an_upstream_without_a_trailing_slash_is_normalized() {
         "--maven-mount",
         "name=plugins,upstream=https://plugins.gradle.org/m2",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     assert_eq!(
         instance(&instances, "plugins").upstream.as_str(),
         "https://plugins.gradle.org/m2/"
@@ -347,7 +403,7 @@ fn a_mount_spec_overrides_registry_and_general_flags() {
         "--maven-mount",
         "name=plugins,cooldown=1d,cache-ttl=90,restrict-downloads=false",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
 
     let plugins = instance(&instances, "plugins");
     assert_eq!(plugins.settings.cooldown, Duration::from_secs(86_400));
@@ -369,7 +425,7 @@ fn an_extra_mount_inherits_the_registry_upstream_when_it_names_none() {
         "--maven-mount",
         "name=fresh,cooldown=0",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     assert_eq!(
         instance(&instances, "fresh").upstream.as_str(),
         "https://repo.example.com/maven2/"
@@ -383,9 +439,9 @@ fn extra_mounts_survive_disabling_the_default_one() {
         "--maven-mount",
         "name=plugins,upstream=https://plugins.gradle.org/m2/",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     assert!(instances.iter().all(|i| i.name != "maven"));
-    assert_eq!(instance(&instances, "plugins").kind, "maven");
+    assert_eq!(instance(&instances, "plugins").kind, RegistryKind::Maven);
     assert!(cli.check_mounts().is_ok());
 }
 
@@ -401,7 +457,7 @@ fn every_registry_takes_extra_mounts() {
         "--maven-mount",
         "name=m2,upstream=https://maven.example.com/",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
 
     let c2 = instance(&instances, "c2");
     assert_eq!(c2.upstream.as_str(), "https://dl.example.com/");
@@ -415,8 +471,8 @@ fn every_registry_takes_extra_mounts() {
         p2.secondary.as_ref().map(Url::as_str),
         Some("https://files.example.com/")
     );
-    assert_eq!(instance(&instances, "n2").kind, "npm");
-    assert_eq!(instance(&instances, "m2").kind, "maven");
+    assert_eq!(instance(&instances, "n2").kind, RegistryKind::Npm);
+    assert_eq!(instance(&instances, "m2").kind, RegistryKind::Maven);
     assert!(cli.check_mounts().is_ok());
 }
 
@@ -428,7 +484,7 @@ fn a_registry_takes_more_than_one_extra_mount() {
         "--maven-mount",
         "name=google,upstream=https://dl.google.com/dl/android/maven2/",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     assert_eq!(instance(&instances, "plugins").path, "/plugins");
     assert_eq!(instance(&instances, "google").path, "/google");
     assert!(cli.check_mounts().is_ok());
@@ -442,10 +498,10 @@ fn a_registry_takes_more_than_one_extra_mount() {
 fn gradles_other_upstreams_are_mounted_out_of_the_box() {
     // Gating only Central would leave `plugins { }` and AndroidX ungated.
     let cli = parse(&["--cooldown", "7d"]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
 
     let portal = instance(&instances, "gradle-plugins");
-    assert_eq!(portal.kind, "maven");
+    assert_eq!(portal.kind, RegistryKind::Maven);
     assert_eq!(portal.path, "/gradle-plugins");
     assert_eq!(portal.upstream.as_str(), "https://plugins.gradle.org/m2/");
 
@@ -478,14 +534,18 @@ fn gradles_other_upstreams_are_mounted_out_of_the_box() {
 
 #[test]
 fn built_in_mounts_can_be_turned_off() {
-    let instances = parse(&["--no-default-mounts"]).instances().unwrap();
+    let instances = parse(&["--no-default-mounts"])
+        .instances(&crate::auth::ProcessEnv)
+        .unwrap();
     let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["crates", "npm", "pypi", "maven"]);
 }
 
 #[test]
 fn disabling_maven_takes_its_built_in_mounts_with_it() {
-    let instances = parse(&["--disable-maven"]).instances().unwrap();
+    let instances = parse(&["--disable-maven"])
+        .instances(&crate::auth::ProcessEnv)
+        .unwrap();
     let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["crates", "npm", "pypi"]);
 }
@@ -497,7 +557,7 @@ fn an_explicit_mount_replaces_the_built_in_of_the_same_name() {
         "--maven-mount",
         "name=gradle-plugins,path=/portal,upstream=https://mirror.example.com/m2/,cooldown=1d",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
 
     let portal = instance(&instances, "gradle-plugins");
     assert_eq!(portal.path, "/portal");
@@ -526,7 +586,7 @@ fn a_root_mount_suppresses_its_built_ins() {
         "--disable-npm",
         "--disable-pypi",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
     let names: Vec<&str> = instances.iter().map(|i| i.name.as_str()).collect();
     assert_eq!(names, ["maven"]);
     assert!(cli.check_mounts().is_ok());
@@ -549,9 +609,9 @@ fn built_in_mounts_do_not_disturb_a_root_deployment() {
 fn one_env_var_can_hold_several_specs() {
     // `;` separates specs so a single CHILLED_MAVEN_MOUNTS can carry a fleet.
     let cli = parse(&["--maven-mount", "name=plugins;name=google"]);
-    let instances = cli.instances().unwrap();
-    assert_eq!(instance(&instances, "plugins").kind, "maven");
-    assert_eq!(instance(&instances, "google").kind, "maven");
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
+    assert_eq!(instance(&instances, "plugins").kind, RegistryKind::Maven);
+    assert_eq!(instance(&instances, "google").kind, RegistryKind::Maven);
 }
 
 #[test]
@@ -604,14 +664,25 @@ fn with_env(cli: &Cli, pairs: &[(&str, &str)]) -> Result<Vec<RegistryInstance>, 
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
-    let mut instances = cli.instances()?;
-    cli.attach_auth(&mut instances, &|key| env.get(key).cloned())?;
-    Ok(instances)
+    cli.instances(&env)
+}
+
+#[test]
+fn a_typoed_auth_env_var_is_refused() {
+    // The key scan sees the injected environment, so a variable naming a mount
+    // token nothing reads is caught before it silently does nothing.
+    let cli = parse(&[]);
+    let err = with_env(&cli, &[("CHILLED_MAVN_BASIC_AUTH_USERNAME", "alice")]).unwrap_err();
+    assert!(err.contains("'MAVN'"), "unexpected error: {err}");
+
+    // The global flag variables end in a matching suffix but name no mount.
+    let ok = with_env(&cli, &[("CHILLED_UPSTREAM_HEADERS", "")]);
+    assert!(ok.is_ok());
 }
 
 #[test]
 fn mounts_have_no_auth_by_default() {
-    let instances = parse(&[]).instances().unwrap();
+    let instances = parse(&[]).instances(&crate::auth::ProcessEnv).unwrap();
     assert!(instances.iter().all(|i| i.auth.is_empty()));
 }
 
@@ -623,7 +694,7 @@ fn cli_auth_lands_on_the_named_mount_only() {
         "--upstream-header",
         "maven=X-Build: ci",
     ]);
-    let instances = cli.instances().unwrap();
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
 
     assert_eq!(
         instance(&instances, "gradle-plugins").auth.describe(),
@@ -721,22 +792,22 @@ fn size_caps_default_to_each_registry_own_limit() {
     let cli = parse(&[]);
     let expected = [
         (
-            "crates",
+            RegistryKind::Crates,
             crates_proxy::DEFAULT_MAX_METADATA_SIZE,
             crates_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         ),
         (
-            "npm",
+            RegistryKind::Npm,
             npm_proxy::DEFAULT_MAX_METADATA_SIZE,
             npm_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         ),
         (
-            "pypi",
+            RegistryKind::Pypi,
             pypi_proxy::DEFAULT_MAX_METADATA_SIZE,
             pypi_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         ),
         (
-            "maven",
+            RegistryKind::Maven,
             maven_proxy::DEFAULT_MAX_METADATA_SIZE,
             maven_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
         ),
@@ -756,10 +827,10 @@ fn size_caps_default_to_each_registry_own_limit() {
 #[test]
 fn general_size_cap_overrides_every_registry_default() {
     let cli = parse(&["--max-artifact-size", "1g", "--max-metadata-size", "2m"]);
-    for id in ["crates", "npm", "pypi", "maven"] {
-        let s = cli.registry_settings(id);
-        assert_eq!(s.max_artifact_size, 1024 * 1024 * 1024, "{id}");
-        assert_eq!(s.max_metadata_size, 2 * 1024 * 1024, "{id}");
+    for kind in RegistryKind::ALL {
+        let s = cli.registry_settings(kind);
+        assert_eq!(s.max_artifact_size, 1024 * 1024 * 1024, "{kind}");
+        assert_eq!(s.max_metadata_size, 2 * 1024 * 1024, "{kind}");
     }
 }
 
@@ -772,14 +843,57 @@ fn per_registry_size_cap_beats_the_general_one() {
         "2g",
     ]);
     assert_eq!(
-        cli.registry_settings("pypi").max_artifact_size,
+        cli.registry_settings(RegistryKind::Pypi).max_artifact_size,
         2 * 1024 * 1024 * 1024
     );
     // Everyone else still takes the general value.
     assert_eq!(
-        cli.registry_settings("maven").max_artifact_size,
+        cli.registry_settings(RegistryKind::Maven).max_artifact_size,
         1024 * 1024 * 1024
     );
+}
+
+#[test]
+fn file_hosts_spec_beats_the_general_flag() {
+    let cli = parse(&[
+        "--pypi-file-hosts",
+        "general.example",
+        "--pypi-mount",
+        "name=torch,upstream=https://dl.example/whl/,files=https://dl.example/,\
+         file-hosts=cdn.example",
+    ]);
+    let instances = cli.instances(&crate::auth::ProcessEnv).unwrap();
+    assert_eq!(instance(&instances, "torch").file_hosts, ["cdn.example"]);
+    // Absent a spec key, a pypi mount inherits the general flag.
+    assert_eq!(instance(&instances, "pypi").file_hosts, ["general.example"]);
+    // Other registries resolve no file hosts at all.
+    assert!(instance(&instances, "maven").file_hosts.is_empty());
+}
+
+#[test]
+fn a_custom_upstream_must_state_the_secondary_url() {
+    // Inheriting the default would silently pair a private mirror with the
+    // public index / file host.
+    let cli = parse(&[
+        "--pypi-mount",
+        "name=mirror,upstream=https://pypi.internal/simple/",
+    ]);
+    let err = cli.instances(&crate::auth::ProcessEnv).unwrap_err();
+    assert!(err.contains("files="), "unexpected error: {err}");
+
+    let cli = parse(&[
+        "--crates-mount",
+        "name=mirror,upstream=https://crates.internal/",
+    ]);
+    let err = cli.instances(&crate::auth::ProcessEnv).unwrap_err();
+    assert!(err.contains("index="), "unexpected error: {err}");
+
+    // Registries without a second URL are unaffected.
+    let cli = parse(&[
+        "--maven-mount",
+        "name=mirror,upstream=https://maven.internal/",
+    ]);
+    assert!(cli.instances(&crate::auth::ProcessEnv).is_ok());
 }
 
 #[test]
@@ -792,9 +906,12 @@ fn a_mount_size_cap_beats_the_registry_and_general_ones() {
         "--max-artifact-size-pypi",
         "400m",
         "--pypi-mount",
-        "name=pytorch,upstream=https://download.pytorch.org/whl/cpu/,max-artifact-size=2g",
+        "name=pytorch,upstream=https://download.pytorch.org/whl/cpu/,\
+         files=https://download.pytorch.org/,max-artifact-size=2g",
     ]);
-    let instances = cli.instances().expect("instances resolve");
+    let instances = cli
+        .instances(&crate::auth::ProcessEnv)
+        .expect("instances resolve");
     let pytorch = instances
         .iter()
         .find(|i| i.name == "pytorch")

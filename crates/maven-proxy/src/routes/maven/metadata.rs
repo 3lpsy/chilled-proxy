@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 use axum::{body::Body, http::header, http::HeaderMap, response::Response};
 use bytes::Bytes;
-use chilled_core::cache::fs::{fetch_file, file_mtime, store_file};
+use chilled_core::cache::fs::{fetch_file_async, file_mtime_async, store_file_async};
 use chilled_core::cache::MEMO_BUCKET_SECS;
-use chilled_core::etag::{etag_marker, filtered_etag, unmark_etag, Marker};
-use chilled_core::http::{data_response, read_capped, text_response, FetchError};
+use chilled_core::etag::{cooldown_validators, etag_marker, unmark_etag, Marker};
+use chilled_core::http::{conditional_get, data_response, read_capped, text_response, FetchError};
 use log::{debug, error, info, warn};
 
 use crate::checksum::ChecksumAlgo;
@@ -46,34 +46,9 @@ pub(super) fn sidecar_path(state: &AppState, coords: &MavenCoords) -> PathBuf {
         .join(SIDECAR_FILE)
 }
 
-/// Attaches cooldown-aware validators: a weak marked ETag (and no
-/// `Last-Modified`) when filtered, the upstream validators otherwise.
-fn with_metadata_validators(
-    mut builder: axum::http::response::Builder,
-    entry: &MavenEntry,
-    marker: Option<Marker>,
-) -> axum::http::response::Builder {
-    match marker {
-        Some(marker) => {
-            if let Some(etag) = entry.etag() {
-                builder = builder.header(header::ETAG, filtered_etag(etag, marker));
-            }
-        }
-        None => {
-            if let Some(etag) = entry.etag() {
-                builder = builder.header(header::ETAG, etag);
-            }
-            if let Some(last_modified) = entry.last_modified() {
-                builder = builder.header(header::LAST_MODIFIED, last_modified);
-            }
-        }
-    }
-    builder
-}
-
 /// Builds a metadata `304 Not Modified` response (no body).
 fn metadata_not_modified(entry: &MavenEntry, state: &AppState, coords: &MavenCoords) -> Response {
-    with_metadata_validators(
+    cooldown_validators(
         Response::builder().status(304),
         entry,
         state.config.serve_marker(coords),
@@ -84,25 +59,15 @@ fn metadata_not_modified(entry: &MavenEntry, state: &AppState, coords: &MavenCoo
 
 /// Reads the pristine cached metadata file off the blocking thread pool.
 async fn cache_read_metadata(state: &AppState, coords: &MavenCoords) -> Option<Vec<u8>> {
-    let path = metadata_cache_path(state, coords);
-    tokio::task::spawn_blocking(move || fetch_file(&path))
-        .await
-        .ok()
-        .flatten()
+    fetch_file_async(metadata_cache_path(state, coords)).await
 }
 
 /// Recreates metadata validators from the cache file's mtime.
 async fn cache_find_metadata(state: &AppState, coords: &MavenCoords) -> Option<MavenEntry> {
-    let path = metadata_cache_path(state, coords);
-    tokio::task::spawn_blocking(move || file_mtime(&path))
-        .await
-        .ok()
-        .flatten()
-        .map(|mtime| {
-            let mut entry = MavenEntry::new();
-            entry.set_mtime(mtime);
-            entry
-        })
+    let mtime = file_mtime_async(metadata_cache_path(state, coords)).await?;
+    let mut entry = MavenEntry::new();
+    entry.set_mtime(mtime);
+    Some(entry)
 }
 
 /// Downloads `maven-metadata.xml` from upstream with conditional headers.
@@ -117,41 +82,19 @@ async fn download_metadata(
         .join(&coords.metadata_rel())
         .expect("validated segments join onto the pinned upstream URL");
 
-    // Pin identity encoding so the body is filterable bytes, never compressed.
-    let mut request = state
-        .client
-        .get(url)
-        .header(header::ACCEPT_ENCODING, "identity");
-    if let Some(etag) = entry.etag() {
-        request = request.header(header::IF_NONE_MATCH, etag);
-    } else if let Some(last_modified) = entry.last_modified() {
-        request = request.header(header::IF_MODIFIED_SINCE, last_modified);
-    }
+    let response = conditional_get(
+        &state.client,
+        url,
+        None,
+        &mut entry,
+        state.config.settings.max_metadata_size,
+    )
+    .await?;
 
-    let mut response = request.send().await.map_err(FetchError::Http)?;
-    let status = response.status().as_u16();
-
-    if let Some(etag) = response
-        .headers()
-        .get(header::ETAG)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_etag(etag);
-    }
-    if let Some(last_modified) = response
-        .headers()
-        .get(header::LAST_MODIFIED)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_last_modified(last_modified);
-    }
-    entry.set_last_updated();
-
-    let data = read_capped(&mut response, state.config.settings.max_metadata_size).await?;
     Ok(MetaResponse {
         entry,
-        status,
-        data,
+        status: response.status,
+        data: response.data,
     })
 }
 
@@ -209,6 +152,11 @@ pub(super) async fn serve_metadata(
             debug!("proxy: metadata cache hit for {coords}");
             return metadata_not_modified(&cached_entry, state, coords);
         }
+        // A memo hit needs no pristine body, so skip the disk read entirely.
+        if let Some(response) = metadata_memo_hit(state, coords, &cached_entry, algo).await {
+            debug!("proxy: metadata memo hit for {coords}");
+            return response;
+        }
         if let Some(data) = cache_read_metadata(state, coords).await {
             debug!("proxy: metadata data cache hit for {coords}");
             return metadata_ok(state, coords, &cached_entry, data, algo).await;
@@ -255,10 +203,12 @@ async fn forward_metadata(
     match response.status {
         200 => {
             debug!("fetch: successfully got metadata for {coords}");
-            let path = metadata_cache_path(state, coords);
-            let data = response.data.clone();
-            let mtime = response.entry.mtime();
-            let _ = tokio::task::spawn_blocking(move || store_file(&path, &data, mtime)).await;
+            store_file_async(
+                metadata_cache_path(state, coords),
+                Bytes::from(response.data.clone()),
+                response.entry.mtime(),
+            )
+            .await;
             state.metadata.store(&key, response.entry.clone());
 
             if window_ok && response.entry.is_equivalent(&client_entry) {
@@ -273,6 +223,10 @@ async fn forward_metadata(
 
             if window_ok && response.entry.is_equivalent(&client_entry) {
                 metadata_not_modified(&response.entry, state, coords)
+            } else if let Some(resp) = metadata_memo_hit(state, coords, &response.entry, algo).await
+            {
+                // A memo hit needs no pristine body: skip the disk read.
+                resp
             } else if let Some(data) = cache_read_metadata(state, coords).await {
                 metadata_ok(state, coords, &response.entry, data, algo).await
             } else {
@@ -280,6 +234,24 @@ async fn forward_metadata(
                 state.metadata.invalidate(&key);
                 plain_error(503, "metadata cache lost")
             }
+        }
+        code if (500..=599).contains(&code) => {
+            // Upstream trouble: a cached copy beats failing the build. 4xx
+            // stays forwarded — a 404 is a real answer, not an outage.
+            if let Some(data) = cache_read_metadata(state, coords).await {
+                warn!("proxy: upstream returned HTTP {code} for {coords}; serving cached metadata");
+                let stale = cache_find_metadata(state, coords)
+                    .await
+                    .or(cached_entry)
+                    .unwrap_or_else(MavenEntry::new);
+                return metadata_ok(state, coords, &stale, data, algo).await;
+            }
+            warn!("fetch: upstream returned HTTP status {code} for {coords}");
+            text_response(
+                code,
+                TEXT_CTYPE,
+                String::from_utf8_lossy(&response.data).into_owned(),
+            )
         }
         code => {
             warn!("fetch: upstream returned HTTP status {code} for {coords}");
@@ -305,7 +277,7 @@ async fn metadata_ok(
     let Some(cutoff) = state.config.cutoff_for(coords) else {
         // Unfiltered: serve verbatim with the upstream validators.
         return match algo {
-            None => with_metadata_validators(
+            None => cooldown_validators(
                 Response::builder()
                     .status(200)
                     .header(header::CONTENT_TYPE, XML_CTYPE),
@@ -342,8 +314,20 @@ async fn metadata_ok(
         }
     };
 
+    filtered_response(state, coords, entry, body, algo, bucket).await
+}
+
+/// Serves an already-produced filtered body as XML or a generated checksum.
+async fn filtered_response(
+    state: &AppState,
+    coords: &MavenCoords,
+    entry: &MavenEntry,
+    body: Bytes,
+    algo: Option<ChecksumAlgo>,
+    bucket: u64,
+) -> Response {
     match algo {
-        None => with_metadata_validators(
+        None => cooldown_validators(
             Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, XML_CTYPE),
@@ -368,6 +352,23 @@ async fn metadata_ok(
     }
 }
 
+/// Serves the memoized filtered body for `entry` without touching the disk
+/// cache — `None` on a memo miss, or when the artifact is unfiltered (the
+/// verbatim pristine body is needed then).
+async fn metadata_memo_hit(
+    state: &AppState,
+    coords: &MavenCoords,
+    entry: &MavenEntry,
+    algo: Option<ChecksumAlgo>,
+) -> Option<Response> {
+    let cutoff = state.config.cutoff_for(coords)?;
+    let bucket = cutoff / MEMO_BUCKET_SECS;
+    let body = state
+        .memo
+        .get(&coords.dir_rel(), &entry.validator(), bucket)?;
+    Some(filtered_response(state, coords, entry, body, algo, bucket).await)
+}
+
 /// Parses versions, tops up the sidecar via POM probes, persists it, and
 /// filters the metadata. `Ok(None)` means no version survived.
 async fn filter_pipeline(
@@ -378,14 +379,15 @@ async fn filter_pipeline(
 ) -> Result<Option<Vec<u8>>, Response> {
     let side_path = sidecar_path(state, coords);
 
-    // Parse the version list and load the sidecar off-thread.
-    let parse_data = data.clone();
+    // Parse the version list and load the sidecar off-thread. The body moves
+    // through the task and back rather than being cloned for it.
     let load_path = side_path.clone();
     let parsed = tokio::task::spawn_blocking(move || {
-        filter::list_versions(&parse_data).map(|v| (v, VersionTimes::load(&load_path)))
+        let versions = filter::list_versions(&data)?;
+        Ok::<_, String>((data, versions, VersionTimes::load(&load_path)))
     })
     .await;
-    let (versions, mut times) = match parsed {
+    let (data, versions, mut times) = match parsed {
         Ok(Ok(parsed)) => parsed,
         Ok(Err(err)) => {
             error!("cooldown: unparseable upstream metadata for {coords}: {err}");
@@ -414,7 +416,7 @@ async fn filter_pipeline(
         if changed {
             times.save(&side_path);
         }
-        filter::filter_metadata(&data, &times, cutoff)
+        filter::filter_metadata(&data, &versions, &times, cutoff)
     })
     .await;
     match filtered {
@@ -466,7 +468,3 @@ pub(super) async fn pass_through(state: &AppState, rel: &str, ctype: &str) -> Re
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Artifact downloads.
-// ---------------------------------------------------------------------------

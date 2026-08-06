@@ -7,13 +7,14 @@ mod common;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use common::StartProxy;
 use common::{ndjson, TestProxy, OLD};
 
 const EPOCH_HTTPDATE: &str = "Thu, 01 Jan 1970 00:00:00 GMT";
 
 #[tokio::test]
 async fn not_cached_fetches_upstream_and_writes_disk() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     proxy
         .mock_index("serde", &body, "\"etag123\"", EPOCH_HTTPDATE)
@@ -40,7 +41,7 @@ async fn not_cached_fetches_upstream_and_writes_disk() {
 async fn cached_within_ttl_serves_from_disk_without_upstream() {
     let proxy = TestProxy::builder()
         .cache_ttl(Duration::from_secs(3600))
-        .start()
+        .start_proxy()
         .await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     proxy
@@ -63,7 +64,10 @@ async fn cached_within_ttl_serves_from_disk_without_upstream() {
 
 #[tokio::test]
 async fn ttl_zero_revalidates_each_request() {
-    let proxy = TestProxy::builder().cache_ttl(Duration::ZERO).start().await;
+    let proxy = TestProxy::builder()
+        .cache_ttl(Duration::ZERO)
+        .start_proxy()
+        .await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     proxy
         .mock_index("serde", &body, "\"etag123\"", EPOCH_HTTPDATE)
@@ -86,7 +90,7 @@ async fn ttl_zero_revalidates_each_request() {
 
 #[tokio::test]
 async fn client_revalidation_gets_304() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     proxy
         .mock_index("serde", &body, "\"etag123\"", EPOCH_HTTPDATE)
@@ -110,7 +114,7 @@ async fn client_revalidation_gets_304() {
 
 #[tokio::test]
 async fn client_if_modified_since_gets_304() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     let last_modified = "Mon, 04 Feb 2019 06:09:26 GMT"; // 2019-02-04 is a Monday
     proxy
@@ -138,7 +142,10 @@ async fn client_if_modified_since_gets_304() {
 async fn expired_with_client_validator_relays_upstream_304() {
     // TTL-expired entry forces a conditional upstream fetch; upstream answers
     // 304 and the client (which sent a matching validator) gets a 304 too.
-    let proxy = TestProxy::builder().cache_ttl(Duration::ZERO).start().await;
+    let proxy = TestProxy::builder()
+        .cache_ttl(Duration::ZERO)
+        .start_proxy()
+        .await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     proxy
         .mock_index("serde", &body, "\"etag123\"", EPOCH_HTTPDATE)
@@ -162,7 +169,7 @@ async fn expired_with_client_validator_relays_upstream_304() {
 
 #[tokio::test]
 async fn stale_cache_served_when_upstream_unreachable() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
     let body = ndjson("serde", &[("1.0.0", OLD)]);
     // Pre-seed a pristine entry; upstream is a refused port.
     proxy.seed_index_file("serde", &body, SystemTime::now());
@@ -174,14 +181,14 @@ async fn stale_cache_served_when_upstream_unreachable() {
 
 #[tokio::test]
 async fn no_cache_and_unreachable_upstream_is_502() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
     // Nothing seeded, nothing cached, upstream dead.
     assert_eq!(proxy.get_index("serde", &[]).await.status(), 502);
 }
 
 #[tokio::test]
 async fn upstream_error_status_is_forwarded() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_index_status("serde", 404).await;
 
     assert_eq!(proxy.get_index("serde", &[]).await.status(), 404);
@@ -191,4 +198,30 @@ async fn upstream_error_status_is_forwarded() {
             .await,
         1
     );
+}
+
+#[tokio::test]
+async fn upstream_5xx_serves_cached_copy() {
+    let proxy = TestProxy::builder()
+        .cache_ttl(std::time::Duration::ZERO)
+        .start_proxy()
+        .await;
+    let body = ndjson("serde", &[("1.0.0", OLD)]);
+    proxy
+        .mock_index("serde", &body, "\"e1\"", "Sun, 06 Nov 1994 08:49:37 GMT")
+        .await;
+    assert_eq!(proxy.get_index("serde", &[]).await.status(), 200);
+
+    // Upstream degrades to 503; the zero TTL forces a refetch, which must
+    // fall back to the cached copy instead of forwarding the outage.
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/se/rd/serde"))
+        .respond_with(wiremock::ResponseTemplate::new(503))
+        .with_priority(1)
+        .mount(proxy.mock_upstream())
+        .await;
+
+    let resp = proxy.get_index("serde", &[]).await;
+    assert_eq!(resp.status(), 200);
+    assert!(resp.text().await.unwrap().contains("1.0.0"));
 }

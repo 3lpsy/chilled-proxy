@@ -1,13 +1,12 @@
 use super::*;
 use std::collections::HashMap;
 
-/// An env lookup over a fixed set of variables.
-fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-    let map: HashMap<String, String> = pairs
+/// An env source over a fixed set of variables.
+fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-        .collect();
-    move |key: &str| map.get(key).cloned()
+        .collect()
 }
 
 /// The value of `header` as a string.

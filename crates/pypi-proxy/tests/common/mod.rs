@@ -7,4 +7,4 @@ pub mod fixtures;
 pub mod proxy;
 
 pub use fixtures::*;
-pub use proxy::{TestProxy, TestProxyBuilder};
+pub use proxy::{StartProxy, TestProxy};

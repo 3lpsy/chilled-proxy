@@ -19,17 +19,14 @@ pub(crate) mod valid;
 /// defaults behind `--max-metadata-size` / `--max-artifact-size`.
 pub use constants::{DEFAULT_MAX_ARTIFACT_SIZE, DEFAULT_MAX_METADATA_SIZE};
 
-use std::sync::Arc;
-
 use axum::{routing::get, Router};
-use chilled_core::cache::{FilteredMemo, MetadataCache};
 use chilled_core::http::error_response;
 use chilled_core::registry::{CacheStats, RegistryProxy};
 
 use crate::routes::{handle_download, handle_index};
 use crate::state::AppState;
 
-pub use crate::config::Config;
+pub use crate::config::{Config, Upstreams};
 pub use crate::constants::{CRATES_IO_URL, INDEX_CRATES_IO_URL};
 
 /// The crates.io registry proxy, mountable under a path prefix.
@@ -42,21 +39,12 @@ impl CratesProxy {
     /// Builds the proxy from its config and a shared HTTP client.
     pub fn new(config: Config, client: reqwest::Client) -> Self {
         CratesProxy {
-            state: AppState {
-                config: Arc::new(config),
-                client,
-                memo: Arc::new(FilteredMemo::new()),
-                metadata: Arc::new(MetadataCache::new()),
-            },
+            state: AppState::new(config, client),
         }
     }
 }
 
 impl RegistryProxy for CratesProxy {
-    fn id(&self) -> &'static str {
-        "crates"
-    }
-
     fn router(&self) -> Router {
         Router::new()
             .route("/index/{*path}", get(handle_index))

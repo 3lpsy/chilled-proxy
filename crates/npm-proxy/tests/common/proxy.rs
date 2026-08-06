@@ -11,66 +11,16 @@ use npm_proxy::NpmProxy;
 
 use super::fixtures::{packument, ETAG};
 
-/// Configures and starts a [`TestProxy`] (npm registry mounted at `/npm`).
-pub struct TestProxyBuilder {
-    inner: TestServerBuilder,
+/// Starts the npm router for a configured [`TestServerBuilder`]. The generic
+/// knobs (`cooldown`, `override_package`, `dead_upstream`, ...) live on the
+/// builder itself.
+pub trait StartProxy {
+    async fn start_proxy(self) -> TestProxy;
 }
 
-impl TestProxyBuilder {
-    pub fn new() -> Self {
-        TestProxyBuilder {
-            inner: TestServerBuilder::new("/npm"),
-        }
-    }
-
-    pub fn cooldown(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cooldown(d);
-        self
-    }
-
-    pub fn cooldown_days(mut self, days: u64) -> Self {
-        self.inner = self.inner.cooldown_days(days);
-        self
-    }
-
-    pub fn cache_ttl(mut self, d: Duration) -> Self {
-        self.inner = self.inner.cache_ttl(d);
-        self
-    }
-
-    pub fn override_package(mut self, name: &str) -> Self {
-        self.inner = self.inner.override_package(name);
-        self
-    }
-
-    pub fn restrict_downloads(mut self) -> Self {
-        self.inner = self.inner.restrict_downloads();
-        self
-    }
-
-    pub fn proxy_url(mut self, url: &str) -> Self {
-        self.inner = self.inner.proxy_url(url);
-        self
-    }
-
-    pub fn dead_upstream(mut self) -> Self {
-        self.inner = self.inner.dead_upstream();
-        self
-    }
-
-    pub fn max_metadata_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_metadata_size(bytes);
-        self
-    }
-
-    pub fn max_artifact_size(mut self, bytes: usize) -> Self {
-        self.inner = self.inner.max_artifact_size(bytes);
-        self
-    }
-
-    pub async fn start(self) -> TestProxy {
+impl StartProxy for TestServerBuilder {
+    async fn start_proxy(self) -> TestProxy {
         let server = self
-            .inner
             .start(|ctx| {
                 let config = npm_proxy::Config::new(ctx.upstream.clone(), ctx.settings.clone());
                 NpmProxy::new(config, reqwest::Client::new()).router()
@@ -86,9 +36,9 @@ pub struct TestProxy {
 }
 
 impl TestProxy {
-    /// Entry point: configure a proxy via the builder.
-    pub fn builder() -> TestProxyBuilder {
-        TestProxyBuilder::new()
+    /// Entry point: a builder for the npm registry mounted at `/npm`.
+    pub fn builder() -> TestServerBuilder {
+        TestServerBuilder::new("/npm")
     }
 
     /// The mock upstream base URL, with a trailing slash.
@@ -154,11 +104,6 @@ impl TestProxy {
     /// Total number of upstream requests received.
     pub async fn upstream_total(&self) -> usize {
         self.server.upstream_total().await
-    }
-
-    /// The upstream packument path for a package (e.g. `/lodash`).
-    pub fn packument_upstream_path(&self, name: &str) -> String {
-        format!("/{name}")
     }
 
     // HTTP drivers (act as the npm client). Paths are relative to `/npm`.

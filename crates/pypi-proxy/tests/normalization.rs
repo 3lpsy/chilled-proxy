@@ -3,13 +3,14 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{simple_json, TestProxy, SHA, SIMPLE_CTYPE, TOO_NEW};
 
 const JSON_ACCEPT: &[(&str, &str)] = &[("accept", SIMPLE_CTYPE)];
 
 #[tokio::test]
 async fn non_normalized_name_redirects_to_normalized_path() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let resp = proxy.get_no_redirect("/simple/Foo.Bar_baz/").await;
     assert_eq!(resp.status(), 301);
@@ -19,7 +20,7 @@ async fn non_normalized_name_redirects_to_normalized_path() {
 
 #[tokio::test]
 async fn upstream_fetch_and_cache_use_the_normalized_name() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json(
         "foo-bar-baz",
         &[("foo_bar_baz-1.0.0.tar.gz", common::OLD, SHA)],
@@ -50,7 +51,7 @@ async fn override_exempts_requests_under_any_spelling() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .override_package("foo-bar-baz")
-        .start()
+        .start_proxy()
         .await;
     let body = simple_json("foo-bar-baz", &[("foo_bar_baz-9.0.0.tar.gz", TOO_NEW, SHA)]);
     proxy.mock_simple("foo-bar-baz", &body, "\"e1\"").await;

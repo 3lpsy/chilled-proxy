@@ -13,6 +13,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{ndjson, TestProxy, OLD};
 
 /// Index-path name vectors that must be rejected without contacting upstream.
@@ -47,7 +48,7 @@ const DOWNLOAD_VECTORS: &[&str] = &[
 
 #[tokio::test]
 async fn index_injection_vectors_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     for path in INDEX_VECTORS {
         assert_eq!(proxy.get(path).await.status(), 404, "path: {path}");
     }
@@ -57,7 +58,7 @@ async fn index_injection_vectors_are_rejected() {
 
 #[tokio::test]
 async fn download_injection_vectors_are_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     for path in DOWNLOAD_VECTORS {
         assert_eq!(proxy.get(path).await.status(), 404, "path: {path}");
     }
@@ -66,7 +67,7 @@ async fn download_injection_vectors_are_rejected() {
 
 #[tokio::test]
 async fn query_string_is_not_forwarded_upstream() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_index(
             "serde",
@@ -86,7 +87,7 @@ async fn query_string_is_not_forwarded_upstream() {
 
 #[tokio::test]
 async fn fragment_is_not_forwarded_upstream() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_index(
             "serde",

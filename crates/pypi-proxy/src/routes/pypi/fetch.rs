@@ -5,7 +5,7 @@ use axum::{
     http::{header, HeaderValue},
     response::Response,
 };
-use chilled_core::http::{read_capped, FetchError};
+use chilled_core::http::{conditional_get, FetchError};
 use log::debug;
 use serde_json::Value;
 
@@ -49,44 +49,15 @@ pub(super) async fn download_simple(
         .join(&format!("{}/", entry.name()))
         .expect("valid normalized project URL");
 
-    // Pin identity encoding so the cap and cache see the real bytes.
-    let mut request = state
-        .client
-        .get(url.clone())
-        .header(header::ACCEPT, upstream_accept())
-        .header(header::ACCEPT_ENCODING, "identity");
-    if let Some(etag) = entry.etag() {
-        request = request.header(header::IF_NONE_MATCH, etag);
-    } else if let Some(last_modified) = entry.last_modified() {
-        request = request.header(header::IF_MODIFIED_SINCE, last_modified);
-    }
-
-    let mut response = request.send().await.map_err(FetchError::Http)?;
-    let status = response.status().as_u16();
-    let ctype = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_owned();
-
-    if let Some(etag) = response
-        .headers()
-        .get(header::ETAG)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_etag(etag);
-    }
-    if let Some(last_modified) = response
-        .headers()
-        .get(header::LAST_MODIFIED)
-        .and_then(|v| v.to_str().ok())
-    {
-        entry.set_last_modified(last_modified);
-    }
-    entry.set_last_updated();
-
-    let data = read_capped(&mut response, state.config.settings.max_metadata_size).await?;
+    let response = conditional_get(
+        &state.client,
+        url.clone(),
+        Some(&upstream_accept()),
+        &mut entry.meta,
+        state.config.settings.max_metadata_size,
+    )
+    .await?;
+    let (status, ctype, data) = (response.status, response.ctype, response.data);
 
     // An HTML index is normalized to the PEP 691 model right here, so filtering,
     // URL rewriting, caching, and rendering downstream never learn that upstream
@@ -140,8 +111,6 @@ pub(super) fn passthrough_response(ctype: &str, data: Vec<u8>) -> Response {
         .expect("valid passthrough response")
 }
 
-/// Fetches a project index from upstream (or stale cache) and serves it.
-///
 #[cfg(test)]
 mod tests {
     use super::*;

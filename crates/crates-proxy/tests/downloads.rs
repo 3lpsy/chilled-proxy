@@ -6,6 +6,7 @@ mod common;
 
 use std::time::SystemTime;
 
+use common::StartProxy;
 use common::{ndjson, TestProxy, CRATE_BYTES, OLD, TOO_NEW};
 
 fn dl_path(name: &str, version: &str) -> String {
@@ -14,7 +15,7 @@ fn dl_path(name: &str, version: &str) -> String {
 
 #[tokio::test]
 async fn download_proxies_then_caches() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_crate("serde", "1.0.0", CRATE_BYTES).await;
 
     let resp = proxy.download("serde", "1.0.0").await;
@@ -33,7 +34,7 @@ async fn download_proxies_then_caches() {
 
 #[tokio::test]
 async fn download_forwards_upstream_404() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_crate_status("serde", "9.9.9", 404).await;
 
     assert_eq!(proxy.download("serde", "9.9.9").await.status(), 404);
@@ -43,7 +44,7 @@ async fn download_forwards_upstream_404() {
 async fn too_new_is_downloadable_without_restrict() {
     // Cooldown hides 2.0.0 from the index, but a direct download still works
     // when --restrict-downloads is off.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy.mock_crate("serde", "2.0.0", CRATE_BYTES).await;
 
     assert_eq!(proxy.download("serde", "2.0.0").await.status(), 200);
@@ -54,7 +55,7 @@ async fn restrict_blocks_too_new_allows_old() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     // Pristine index on disk carries the pubtimes the gate reads.
     let index = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
@@ -77,7 +78,7 @@ async fn restrict_allows_old_mixed_case_crate() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     // Pristine index seeded at the lowercased path, as the index endpoint writes it.
     proxy.seed_index_file(
@@ -97,7 +98,7 @@ async fn restrict_is_fail_closed() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
 
     // Index never cached -> cannot verify pubtime -> refused.
@@ -114,7 +115,10 @@ async fn restrict_is_fail_closed() {
 
 #[tokio::test]
 async fn restrict_is_noop_when_cooldown_disabled() {
-    let proxy = TestProxy::builder().restrict_downloads().start().await; // cooldown = 0
+    let proxy = TestProxy::builder()
+        .restrict_downloads()
+        .start_proxy()
+        .await; // cooldown = 0
     proxy.mock_crate("serde", "2.0.0", CRATE_BYTES).await;
 
     assert_eq!(proxy.download("serde", "2.0.0").await.status(), 200);
@@ -122,7 +126,7 @@ async fn restrict_is_noop_when_cooldown_disabled() {
 
 #[tokio::test]
 async fn download_transport_failure_is_502() {
-    let proxy = TestProxy::builder().dead_upstream().start().await;
+    let proxy = TestProxy::builder().dead_upstream().start_proxy().await;
     // Not cached, upstream refused -> transport error mapped to 502.
     assert_eq!(proxy.download("serde", "1.0.0").await.status(), 502);
 }
@@ -133,7 +137,10 @@ async fn oversized_crate_is_507() {
     // upstream/forged response trying to exhaust memory.) The cap is set
     // explicitly so the test states what it exercises rather than inheriting it.
     const CAP: usize = 0x1000;
-    let proxy = TestProxy::builder().max_artifact_size(CAP).start().await;
+    let proxy = TestProxy::builder()
+        .max_artifact_size(CAP)
+        .start_proxy()
+        .await;
     proxy
         .mock_crate("serde", "1.0.0", &vec![0u8; CAP + 1])
         .await;
@@ -148,7 +155,7 @@ async fn restrict_fail_closed_on_non_utf8_index() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     // A cached index entry that isn't valid UTF-8 can't be verified -> refuse.
     proxy.seed_index_bytes("serde", &[0xff, 0xfe, 0x00], SystemTime::now());
@@ -163,7 +170,7 @@ async fn restrict_gate_fetches_the_index_on_demand() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .start()
+        .start_proxy()
         .await;
     let body = ndjson("serde", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)]);
     proxy
@@ -192,13 +199,16 @@ async fn a_raised_cap_admits_a_body_the_default_would_refuse() {
     const SMALL: usize = 0x1000;
     let body = vec![7u8; SMALL + 1];
 
-    let tight = TestProxy::builder().max_artifact_size(SMALL).start().await;
+    let tight = TestProxy::builder()
+        .max_artifact_size(SMALL)
+        .start_proxy()
+        .await;
     tight.mock_crate("serde", "1.0.0", &body).await;
     assert_eq!(tight.download("serde", "1.0.0").await.status(), 507);
 
     let roomy = TestProxy::builder()
         .max_artifact_size(SMALL * 4)
-        .start()
+        .start_proxy()
         .await;
     roomy.mock_crate("serde", "1.0.0", &body).await;
     let resp = roomy.download("serde", "1.0.0").await;
@@ -211,4 +221,50 @@ async fn a_raised_cap_admits_a_body_the_default_would_refuse() {
             .len() as usize,
         body.len()
     );
+}
+
+#[tokio::test]
+async fn download_keeps_the_upstream_path_prefix() {
+    use chilled_core::registry::RegistryProxy;
+
+    // A mirror served under a sub-path (Nexus-style `/repository/cargo/`) must
+    // keep that prefix on the download URL rather than having it replaced by
+    // an absolute join. (Regression: only `/api/v1/crates/...` was requested.)
+    let upstream = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            "/repository/cargo/api/v1/crates/serde/1.0.0/download",
+        ))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_bytes(CRATE_BYTES.to_vec()))
+        .mount(&upstream)
+        .await;
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let base = url::Url::parse(&format!("{}/repository/cargo/", upstream.uri())).unwrap();
+    let config = crates_proxy::Config::new(
+        crates_proxy::Upstreams {
+            index: base.clone(),
+            download: base,
+        },
+        chilled_core::config::RegistrySettings {
+            cache_dir: tmp.path().to_path_buf(),
+            cache_ttl: std::time::Duration::from_secs(3600),
+            cooldown: std::time::Duration::ZERO,
+            overrides: std::sync::Arc::new(std::collections::HashSet::new()),
+            restrict_downloads: false,
+            proxy_url: url::Url::parse("http://localhost:3080/crates/").unwrap(),
+            max_metadata_size: crates_proxy::DEFAULT_MAX_METADATA_SIZE,
+            max_artifact_size: crates_proxy::DEFAULT_MAX_ARTIFACT_SIZE,
+        },
+    );
+    let router = crates_proxy::CratesProxy::new(config, reqwest::Client::new()).router();
+    let (base_url, client) = chilled_testkit::serve_app(router, "/").await;
+
+    let resp = client
+        .get(format!("{base_url}/api/v1/crates/serde/1.0.0/download"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), CRATE_BYTES);
 }

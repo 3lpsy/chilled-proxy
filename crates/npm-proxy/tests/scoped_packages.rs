@@ -3,11 +3,12 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{TestProxy, OLD, TARBALL_BYTES};
 
 #[tokio::test]
 async fn encoded_and_literal_scope_paths_serve_the_same_packument() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_packument("@scope/pkg", &[("1.0.0", OLD)]).await;
 
     let literal = proxy.get("/@scope/pkg").await;
@@ -25,7 +26,7 @@ async fn encoded_and_literal_scope_paths_serve_the_same_packument() {
 
 #[tokio::test]
 async fn scoped_tarball_downloads_and_caches() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     proxy
         .mock_tarball("@scope/pkg", "pkg-1.0.0.tgz", TARBALL_BYTES)
         .await;
@@ -40,7 +41,7 @@ async fn scoped_tarball_downloads_and_caches() {
 
 #[tokio::test]
 async fn double_encoded_scope_separator_is_rejected() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
 
     let resp = proxy.get("/@scope%252fpkg").await;
     assert_eq!(resp.status(), 404);

@@ -8,7 +8,9 @@
 pub mod builder;
 pub mod marker;
 pub mod server;
+pub mod time;
 
 pub use builder::{TestContext, TestServerBuilder};
 pub use marker::{marker_prefix, shift_marker_bucket};
-pub use server::TestServer;
+pub use server::{serve_app, TestServer};
+pub use time::{rfc3339_from_now, OLD, TOO_NEW};

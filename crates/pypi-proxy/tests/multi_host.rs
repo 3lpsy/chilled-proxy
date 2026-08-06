@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{simple_json, TestProxy, OLD, SHA, SIMPLE_CTYPE};
 use serde_json::json;
 use wiremock::matchers::{method, path as match_path};
@@ -49,8 +50,7 @@ async fn a_file_host_named_by_the_index_is_used_when_allowed() {
     // 127.0.0.1 is the mock's host, so allowing it stands in for an operator
     // declaring the index's second CDN.
     let proxy = TestProxy::builder()
-        .file_hosts(&["127.0.0.1"])
-        .start()
+        .start_proxy_with_hosts(&["127.0.0.1"])
         .await;
     proxy
         .mock_simple("foo", &doc_pointing_at(&cdn_url), "\"e1\"")
@@ -81,7 +81,7 @@ async fn an_unallowed_file_host_falls_back_to_the_pinned_files_url() {
     // Substituting the pinned host is what `--pypi-files-url` is for (an
     // operator mirroring PyPI's file host), so an undeclared host must not be
     // honored — and must not fail either.
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     let body = simple_json("foo", &[("foo-1.0.0.tar.gz", OLD, SHA)]);
     proxy.mock_simple("foo", &body, "\"e1\"").await;
     // The fixture doc names files.pythonhosted.org; the mount allows only the
@@ -105,8 +105,7 @@ async fn an_allowed_host_is_matched_case_insensitively_and_ignores_port() {
     // A host is a host whatever its case; the mock's port differs from the
     // mount's pinned one, which is the point.
     let proxy = TestProxy::builder()
-        .file_hosts(&["127.0.0.1"])
-        .start()
+        .start_proxy_with_hosts(&["127.0.0.1"])
         .await;
     proxy
         .mock_simple("foo", &doc_pointing_at(&cdn_url), "\"e1\"")
@@ -132,8 +131,7 @@ async fn a_multi_host_index_serves_every_slice() {
     let cdn = other_cdn(b"cdn-hosted").await;
     let cdn_url = format!("{}/elsewhere/foo-1.0.0.tar.gz", cdn.uri());
     let proxy = TestProxy::builder()
-        .file_hosts(&["127.0.0.1"])
-        .start()
+        .start_proxy_with_hosts(&["127.0.0.1"])
         .await;
 
     // `foo` lives on the other CDN...
@@ -181,8 +179,7 @@ async fn a_metadata_sidecar_follows_its_distribution_to_the_named_host() {
     let cdn_url = format!("{}/elsewhere/foo-1.0.0.tar.gz", cdn.uri());
 
     let proxy = TestProxy::builder()
-        .file_hosts(&["127.0.0.1"])
-        .start()
+        .start_proxy_with_hosts(&["127.0.0.1"])
         .await;
     proxy
         .mock_simple("foo", &doc_pointing_at(&cdn_url), "\"e1\"")
@@ -204,8 +201,7 @@ async fn the_gate_and_the_download_agree_on_which_file_they_mean() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()
-        .file_hosts(&["127.0.0.1"])
-        .start()
+        .start_proxy_with_hosts(&["127.0.0.1"])
         .await;
     proxy
         .mock_simple("foo", &doc_pointing_at(&cdn_url), "\"e1\"")

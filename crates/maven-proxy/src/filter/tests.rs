@@ -1,6 +1,12 @@
 use super::{filter_metadata, list_versions};
 use crate::sidecar::{Stamp, VersionTimes};
 
+/// Parses the version list itself, as the serve pipeline does before calling
+/// [`filter_metadata`].
+fn run(xml: &[u8], times: &VersionTimes, cutoff: u64) -> Result<Option<Vec<u8>>, String> {
+    filter_metadata(xml, &list_versions(xml)?, times, cutoff)
+}
+
 const XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <metadata>
   <groupId>com.example</groupId>
@@ -43,7 +49,7 @@ fn lists_versions_in_order() {
 #[test]
 fn drops_versions_newer_than_cutoff_and_repoints() {
     let t = times(&[("1.0.0", 100), ("1.1.0", 200), ("2.0.0", 900)]);
-    let out = filter_metadata(XML.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(XML.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
 
     assert!(text.contains("<version>1.0.0</version>"));
@@ -62,7 +68,7 @@ fn drops_versions_newer_than_cutoff_and_repoints() {
 fn unknown_age_is_gated_fail_closed() {
     // 2.0.0 has no sidecar entry at all: it must be dropped.
     let t = times(&[("1.0.0", 100), ("1.1.0", 200)]);
-    let out = filter_metadata(XML.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(XML.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(!text.contains("2.0.0"));
     assert!(text.contains("<latest>1.1.0</latest>"));
@@ -71,13 +77,13 @@ fn unknown_age_is_gated_fail_closed() {
 #[test]
 fn nothing_surviving_yields_none() {
     let t = times(&[("1.0.0", 900), ("1.1.0", 901), ("2.0.0", 902)]);
-    assert!(filter_metadata(XML.as_bytes(), &t, 500).unwrap().is_none());
+    assert!(run(XML.as_bytes(), &t, 500).unwrap().is_none());
 }
 
 #[test]
 fn boundary_ts_equal_to_cutoff_survives() {
     let t = times(&[("1.0.0", 500), ("1.1.0", 501), ("2.0.0", 502)]);
-    let out = filter_metadata(XML.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(XML.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("<version>1.0.0</version>"));
     assert!(!text.contains("1.1.0"));
@@ -88,7 +94,7 @@ fn boundary_ts_equal_to_cutoff_survives() {
 fn release_skips_snapshot_survivors() {
     let xml = XML.replace("2.0.0", "2.0.0-SNAPSHOT");
     let t = times(&[("1.0.0", 100), ("1.1.0", 200), ("2.0.0-SNAPSHOT", 300)]);
-    let out = filter_metadata(xml.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(xml.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
     // latest may be the snapshot, release must not be.
     assert!(text.contains("<latest>2.0.0-SNAPSHOT</latest>"));
@@ -101,7 +107,7 @@ fn release_dropped_when_only_snapshots_survive() {
 <release>1-SNAPSHOT</release><versions><version>1-SNAPSHOT</version></versions>
 </versioning></metadata>"#;
     let t = times(&[("1-SNAPSHOT", 100)]);
-    let out = filter_metadata(xml.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(xml.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(!text.contains("<release>"));
     assert!(text.contains("<latest>1-SNAPSHOT</latest>"));
@@ -114,7 +120,7 @@ fn top_level_version_element_is_not_filtered() {
     let xml = r#"<metadata><version>9.9.9</version><versioning>
 <versions><version>1.0.0</version></versions></versioning></metadata>"#;
     let t = times(&[("1.0.0", 100)]);
-    let out = filter_metadata(xml.as_bytes(), &t, 500).unwrap().unwrap();
+    let out = run(xml.as_bytes(), &t, 500).unwrap().unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("<version>9.9.9</version>"));
     assert_eq!(list_versions(xml.as_bytes()).unwrap(), vec!["1.0.0"]);
@@ -122,5 +128,5 @@ fn top_level_version_element_is_not_filtered() {
 
 #[test]
 fn malformed_xml_is_an_error() {
-    assert!(filter_metadata(b"<metadata><oops", &times(&[]), 500).is_err());
+    assert!(run(b"<metadata><oops", &times(&[]), 500).is_err());
 }

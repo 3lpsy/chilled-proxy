@@ -3,6 +3,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{rfc3339_from_now, TestProxy, OLD, TOO_NEW};
 
 const WEEK_SECS: u64 = 7 * 86_400;
@@ -14,7 +15,7 @@ fn week_prefix() -> String {
 
 #[tokio::test]
 async fn filtering_hides_too_new_version_from_versions_and_time() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -40,7 +41,7 @@ async fn filtering_hides_too_new_version_from_versions_and_time() {
 
 #[tokio::test]
 async fn boundary_keeps_at_cutoff_drops_newer() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     // `kept` sits an hour older than the cutoff, `dropped` an hour newer — a
     // comfortable margin around `now - 7d` that the request can't cross.
     let kept = rfc3339_from_now(-(WEEK_SECS as i64) - 3600);
@@ -64,7 +65,7 @@ async fn boundary_keeps_at_cutoff_drops_newer() {
 
 #[tokio::test]
 async fn cooldown_disabled_keeps_everything_but_still_rewrites() {
-    let proxy = TestProxy::builder().start().await; // cooldown = 0
+    let proxy = TestProxy::builder().start_proxy().await; // cooldown = 0
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -84,7 +85,7 @@ async fn cooldown_disabled_keeps_everything_but_still_rewrites() {
 
 #[tokio::test]
 async fn latest_repointed_to_newest_survivor() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     // latest = 3.0.0 (last entry) gets filtered; 2.0.0 is the newest survivor.
     proxy
         .mock_packument(
@@ -108,7 +109,7 @@ async fn latest_repointed_to_newest_survivor() {
 
 #[tokio::test]
 async fn tag_pointing_at_filtered_version_is_dropped() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = common::packument_with_tags(
         "lodash",
         &[("2.0.0", TOO_NEW), ("1.0.0", OLD)],
@@ -133,7 +134,7 @@ async fn tag_pointing_at_filtered_version_is_dropped() {
 
 #[tokio::test]
 async fn all_versions_filtered_is_npm_404() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy.mock_packument("lodash", &[("2.0.0", TOO_NEW)]).await;
 
     let resp = proxy.get_packument("lodash", &[]).await;
@@ -144,7 +145,7 @@ async fn all_versions_filtered_is_npm_404() {
 
 #[tokio::test]
 async fn filtered_body_is_memoized() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -167,7 +168,7 @@ async fn filtered_body_is_memoized() {
 
 #[tokio::test]
 async fn marked_etag_revalidation_yields_304() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -190,7 +191,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
     // Regression: the marker carries the cutoff bucket, so a client holding a
     // copy filtered at an earlier bucket is re-served — otherwise versions
     // that aged past the cooldown would stay invisible to it indefinitely.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -209,7 +210,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
 
 #[tokio::test]
 async fn unmarked_etag_under_cooldown_is_not_304() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])
         .await;
@@ -230,7 +231,7 @@ async fn override_package_is_exempt_from_cooldown() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .override_package("lodash")
-        .start()
+        .start_proxy()
         .await;
     proxy
         .mock_packument("lodash", &[("1.0.0", OLD), ("2.0.0", TOO_NEW)])

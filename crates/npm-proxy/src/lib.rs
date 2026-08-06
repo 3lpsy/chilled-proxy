@@ -19,10 +19,8 @@ pub(crate) mod valid;
 pub use constants::{DEFAULT_MAX_ARTIFACT_SIZE, DEFAULT_MAX_METADATA_SIZE};
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use axum::Router;
-use chilled_core::cache::{FilteredMemo, MetadataCache};
 use chilled_core::config::RegistrySettings;
 use chilled_core::etag::Marker;
 use chilled_core::registry::{CacheStats, RegistryProxy};
@@ -84,21 +82,12 @@ impl NpmProxy {
     /// Builds the proxy from its config and a shared HTTP client.
     pub fn new(config: Config, client: reqwest::Client) -> Self {
         NpmProxy {
-            state: AppState {
-                config: Arc::new(config),
-                client,
-                memo: Arc::new(FilteredMemo::new()),
-                metadata: Arc::new(MetadataCache::new()),
-            },
+            state: AppState::new(config, client),
         }
     }
 }
 
 impl RegistryProxy for NpmProxy {
-    fn id(&self) -> &'static str {
-        "npm"
-    }
-
     fn router(&self) -> Router {
         // One fallback handler: npm paths need raw-URI classification.
         Router::new()

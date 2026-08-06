@@ -3,6 +3,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::{http_date_from_now, metadata_xml, TestProxy, OLD, OLD_NEWER, TOO_NEW};
 
 const GROUP: &str = "com/example";
@@ -17,7 +18,7 @@ fn week_prefix() -> String {
 
 #[tokio::test]
 async fn filtering_hides_too_new_version() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -42,7 +43,7 @@ async fn filtering_hides_too_new_version() {
 
 #[tokio::test]
 async fn boundary_keeps_at_cutoff_drops_newer() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     // `kept` sits exactly at the cutoff when crafted (and only ages past it);
     // `dropped` sits two hours inside the window.
     let kept = http_date_from_now(-(WEEK_SECS as i64));
@@ -68,7 +69,7 @@ async fn boundary_keeps_at_cutoff_drops_newer() {
 
 #[tokio::test]
 async fn latest_and_release_repoint_to_survivors() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(
         GROUP,
         ARTIFACT,
@@ -98,7 +99,7 @@ async fn latest_and_release_repoint_to_survivors() {
 
 #[tokio::test]
 async fn all_versions_filtered_yields_404() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -111,7 +112,7 @@ async fn all_versions_filtered_yields_404() {
 
 #[tokio::test]
 async fn cooldown_disabled_serves_verbatim() {
-    let proxy = TestProxy::builder().start().await; // cooldown = 0
+    let proxy = TestProxy::builder().start_proxy().await; // cooldown = 0
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -129,7 +130,7 @@ async fn cooldown_disabled_serves_verbatim() {
 
 #[tokio::test]
 async fn second_request_reuses_memo_and_sidecar() {
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -176,8 +177,8 @@ async fn second_request_reuses_memo_and_sidecar() {
 async fn override_exempts_artifact_from_cooldown() {
     let proxy = TestProxy::builder()
         .cooldown_days(7)
-        .override_artifact("com.example:thing")
-        .start()
+        .override_package("com.example:thing")
+        .start_proxy()
         .await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0", "2.0.0"], "2.0.0", "2.0.0");
     proxy
@@ -197,7 +198,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
     // Regression: the marker carries the cutoff bucket, so a client holding a
     // copy filtered at an earlier bucket is re-served — otherwise versions
     // that aged past the cooldown would stay invisible to it indefinitely.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, ARTIFACT, &["1.0.0"], "1.0.0", "1.0.0");
     proxy
         .mock_metadata(GROUP, ARTIFACT, &body, "\"etag123\"", OLD)
@@ -229,7 +230,7 @@ async fn stale_bucket_marker_is_reserved_not_304() {
 async fn group_level_plugin_metadata_passes_through() {
     // Plugin-prefix metadata has <plugins> but no <versions>; gating it to a
     // 404 would break `mvn <prefix>:<goal>` resolution.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
         "<metadata><plugins><plugin><name>Thing</name>",
@@ -259,7 +260,7 @@ async fn group_level_plugin_metadata_passes_through() {
 async fn artifact_named_snapshot_is_still_gated() {
     // An artifactId ending in `-SNAPSHOT` must not be mistaken for a snapshot
     // version directory and slip past the cooldown ungated.
-    let proxy = TestProxy::builder().cooldown_days(7).start().await;
+    let proxy = TestProxy::builder().cooldown_days(7).start_proxy().await;
     let body = metadata_xml(GROUP, "thing-SNAPSHOT", &["2.0.0"], "2.0.0", "2.0.0");
     proxy
         .mock_metadata(GROUP, "thing-SNAPSHOT", &body, "\"etagS\"", OLD)

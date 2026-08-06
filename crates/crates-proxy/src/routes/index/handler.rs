@@ -13,8 +13,8 @@ use crate::cache::IndexEntry;
 
 use crate::routes::index::fetch::forward_index;
 use crate::routes::index::serve::{
-    cache_find_index, cache_read_index, gen_config_json_file, index_not_modified, index_ok,
-    CONFIG_JSON_ENDPOINT,
+    cache_find_index, cache_read_index, gen_config_json_file, index_memo_hit, index_not_modified,
+    index_ok, CONFIG_JSON_ENDPOINT,
 };
 use crate::state::AppState;
 
@@ -42,27 +42,36 @@ pub(crate) async fn handle_index(
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
     {
-        index_entry.set_etag(&unmark_etag(inm));
+        index_entry.meta.set_etag(&unmark_etag(inm));
         client_marker = etag_marker(inm);
     } else if let Some(ims) = headers
         .get(header::IF_MODIFIED_SINCE)
         .and_then(|v| v.to_str().ok())
     {
-        index_entry.set_last_modified(ims);
+        index_entry.meta.set_last_modified(ims);
     }
 
     let window_ok = client_marker == state.config.serve_marker(&name);
 
     // Serve from cache when the metadata cache is warm and unexpired.
     if let Some(cached_entry) = state.metadata.fetch(&name) {
-        if cached_entry.is_expired_with_ttl(&state.config.settings.cache_ttl) {
+        if cached_entry
+            .meta
+            .is_expired_with_ttl(&state.config.settings.cache_ttl)
+        {
             debug!("proxy: index cache expired for {name}, refreshing...");
             return forward_index(&state, index_entry, Some(cached_entry), &name, window_ok).await;
         }
 
-        if window_ok && cached_entry.is_equivalent(&index_entry) {
+        if window_ok && cached_entry.meta.is_equivalent(&index_entry.meta) {
             debug!("proxy: index metadata cache hit for {name}");
             return index_not_modified(&cached_entry, &state.config, &name);
+        }
+
+        // A memo hit needs no pristine body, so skip the disk read entirely.
+        if let Some(response) = index_memo_hit(&cached_entry, &state, &name) {
+            debug!("proxy: index memo hit for {name}");
+            return response;
         }
 
         if let Some(data) = cache_read_index(&state.config.index_dir, &index_entry).await {

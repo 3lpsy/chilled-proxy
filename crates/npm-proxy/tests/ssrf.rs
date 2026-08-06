@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::StartProxy;
 use common::TestProxy;
 
 /// Paths that must be rejected without contacting upstream.
@@ -33,7 +34,7 @@ const VECTORS: &[&str] = &[
 
 #[tokio::test]
 async fn injection_vectors_are_rejected_before_upstream() {
-    let proxy = TestProxy::builder().start().await;
+    let proxy = TestProxy::builder().start_proxy().await;
     for path in VECTORS {
         assert_eq!(proxy.get(path).await.status(), 404, "path: {path}");
     }
