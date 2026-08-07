@@ -19,11 +19,9 @@ impl Display for FetchError {
     }
 }
 
-/// Reads a response body into memory, capped at `max` bytes.
-///
-/// Rejects up front when `Content-Length` exceeds the cap, and again while
-/// streaming, so a chunked response cannot exhaust memory. Errors rather than
-/// truncating, so callers never serve a partial body.
+/// Reads a response body into memory, capped at `max` bytes. Rejects up front
+/// when `Content-Length` exceeds the cap, and again while streaming; errors
+/// rather than truncating, so callers never serve a partial body.
 pub async fn read_capped(
     response: &mut reqwest::Response,
     max: usize,
@@ -34,9 +32,8 @@ pub async fn read_capped(
         }
     }
 
-    // Reserve from the declared length so a large body doesn't grow through
-    // a dozen reallocations — but cap the trust put in the header, so a lying
-    // upstream cannot make the proxy allocate the cap up front.
+    // Reserve from the declared length to avoid regrowth, but cap the trust
+    // put in the header so a lying upstream cannot force a huge allocation.
     const MAX_PREALLOC: usize = 0x80_0000; // 8 MiB
     let hint = response.content_length().map_or(0, |len| len as usize);
     let mut data = Vec::with_capacity(hint.min(max).min(MAX_PREALLOC));
@@ -47,14 +44,4 @@ pub async fn read_capped(
         data.extend_from_slice(&chunk);
     }
     Ok(data)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fetch_error_displays() {
-        assert_eq!(FetchError::TooLarge.to_string(), "response body too large");
-    }
 }

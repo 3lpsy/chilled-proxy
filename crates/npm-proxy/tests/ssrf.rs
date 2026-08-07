@@ -1,10 +1,6 @@
-//! SSRF / URL-injection / traversal hardening.
-//!
-//! Package names, versions, and tarball file names are interpolated into
-//! `Url::join` (to build the upstream request) and into filesystem cache
-//! paths, so a crafted segment must never change the upstream host/scheme or
-//! escape the cache dir. Every vector must be rejected with `404` *before*
-//! any upstream request.
+//! SSRF / URL-injection / traversal hardening: hostile names, versions, and
+//! tarball file names must be rejected with `404` *before* any upstream
+//! request, since these segments feed `Url::join` and cache paths.
 
 mod common;
 

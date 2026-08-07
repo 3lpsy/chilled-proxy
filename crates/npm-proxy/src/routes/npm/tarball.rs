@@ -12,7 +12,7 @@ use crate::http::format_npm_error;
 use crate::model::NpmEntry;
 use crate::model::PackageRef;
 use crate::routes::npm::cache::{cache_read_packument, cache_read_tarball, cache_write_packument};
-use crate::routes::npm::packument::download_packument;
+use crate::routes::npm::fetch::download_packument;
 use crate::state::AppState;
 
 pub(super) async fn handle_tarball(
@@ -59,11 +59,9 @@ pub(super) async fn handle_tarball(
     }
 }
 
-/// Whether `version` may be downloaded under `--restrict-downloads`.
-///
-/// The publish time is read from the locally cached *pristine* packument.
-/// **Fail-closed**: no cached packument, unknown version, or a too-new stamp
-/// all refuse the download.
+/// Whether `version` may be downloaded under `--restrict-downloads`, per the
+/// locally cached *pristine* packument's publish time. **Fail-closed**: no
+/// cached packument, unknown version, or a too-new stamp all refuse.
 async fn tarball_old_enough(
     state: &AppState,
     pkg: &PackageRef,

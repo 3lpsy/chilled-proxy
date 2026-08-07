@@ -1,8 +1,7 @@
-//! Persisted per-artifact version-age sidecar (`.chilled-versions.json`).
-//!
-//! Maven metadata carries no per-version timestamps, so ages are probed over
-//! HTTP and persisted here: `{"1.2.3": {"ts": 1742440425, "src": "lm"}}` where
-//! `src` is `"lm"` (from `Last-Modified`) or `"fs"` (first-seen fallback).
+//! Persisted per-artifact version-age sidecar (`.chilled-versions.json`):
+//! `{"1.2.3": {"ts": 1742440425, "src": "lm"}}`, where `src` is `"lm"` (from
+//! `Last-Modified`) or `"fs"` (first-seen fallback), since Maven metadata
+//! carries no per-version timestamps of its own.
 
 use std::collections::BTreeMap;
 use std::path::Path;

@@ -11,10 +11,8 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/// Formats a `SystemTime` as an IMF-fixdate string (always in GMT).
-///
-/// Times before the Unix epoch are clamped to the epoch (never produced for
-/// real file mtimes).
+/// Formats a `SystemTime` as an IMF-fixdate string (always in GMT). Times
+/// before the Unix epoch are clamped to the epoch.
 pub fn fmt_http_date(t: SystemTime) -> String {
     let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     let days = (secs / SECS_PER_DAY) as i64;
@@ -34,10 +32,8 @@ pub fn fmt_http_date(t: SystemTime) -> String {
 }
 
 /// Parses an IMF-fixdate string into a `SystemTime`, or `None` if malformed.
-///
-/// Lenient about the leading weekday token; the date/time fields must be the
-/// fixed-width IMF-fixdate form. The obsolete RFC 850 / asctime formats are not
-/// supported (crates.io does not use them).
+/// Lenient about the leading weekday token; the obsolete RFC 850 / asctime
+/// formats are not supported.
 pub fn parse_http_date(s: &str) -> Option<SystemTime> {
     // e.g. "Sun, 06 Nov 1994 08:49:37 GMT"
     let mut it = s.split_whitespace();
@@ -99,33 +95,4 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
     (y as i32, m as u32, d)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rfc_example_round_trip() {
-        let s = "Sun, 06 Nov 1994 08:49:37 GMT";
-        let t = parse_http_date(s).unwrap();
-        // 784111777 is the canonical unix time for this date.
-        assert_eq!(t.duration_since(UNIX_EPOCH).unwrap().as_secs(), 784_111_777);
-        assert_eq!(fmt_http_date(t), s);
-    }
-
-    #[test]
-    fn epoch() {
-        let t = UNIX_EPOCH;
-        assert_eq!(fmt_http_date(t), "Thu, 01 Jan 1970 00:00:00 GMT");
-        assert_eq!(parse_http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(t));
-    }
-
-    #[test]
-    fn rejects_garbage() {
-        assert_eq!(parse_http_date(""), None);
-        assert_eq!(parse_http_date("not a date"), None);
-        assert_eq!(parse_http_date("Sun, 06 Xxx 1994 08:49:37 GMT"), None);
-        assert_eq!(parse_http_date("Sun, 06 Nov 1994 08:49:37 PST"), None);
-    }
 }

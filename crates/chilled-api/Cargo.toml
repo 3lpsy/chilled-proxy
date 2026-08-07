@@ -1,0 +1,36 @@
+[package]
+name = "chilled-api"
+description = "Management API, persistence, and embedded web UI for chilled-proxy"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "chilled_api"
+path = "src/lib.rs"
+
+[dependencies]
+chilled-wire = { path = "../chilled-wire" }
+chilled-core = { path = "../chilled-core" }
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+argon2.workspace = true
+password-hash.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+include_dir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

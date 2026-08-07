@@ -24,7 +24,9 @@ path = "src/main.rs"
 native-certs = ["reqwest/rustls-tls-native-roots"]
 
 [dependencies]
+chilled-wire = { path = "../chilled-wire" }
 chilled-core = { path = "../chilled-core" }
+chilled-api = { path = "../chilled-api" }
 crates-proxy = { path = "../crates-proxy" }
 npm-proxy = { path = "../npm-proxy" }
 pypi-proxy = { path = "../pypi-proxy" }
@@ -35,6 +37,7 @@ log.workspace = true
 env_logger.workspace = true
 axum.workspace = true
 tokio.workspace = true
+tower.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]

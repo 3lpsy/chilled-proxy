@@ -11,8 +11,17 @@ use crate::valid;
 /// unreadable or malformed entries are skipped rather than failing the report.
 pub(crate) fn cache_stats(crates_dir: &Path) -> CacheStats {
     let mut artifacts = Vec::new();
-    let Ok(crate_dirs) = std::fs::read_dir(crates_dir) else {
-        return CacheStats::default();
+    // A missing directory is an empty cache; any other error (fd exhaustion,
+    // I/O) must not read as empty or consumers would wrongly prune.
+    let crate_dirs = match std::fs::read_dir(crates_dir) {
+        Ok(dirs) => dirs,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CacheStats::default(),
+        Err(_) => {
+            return CacheStats {
+                incomplete: true,
+                ..Default::default()
+            }
+        }
     };
 
     for crate_dir in crate_dirs.flatten() {
@@ -39,21 +48,25 @@ pub(crate) fn cache_stats(crates_dir: &Path) -> CacheStats {
             if !valid::is_crate_version(version) {
                 continue;
             }
-            let cached_at = file
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
+            let meta = file.metadata().ok();
+            let cached_at = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
                 .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
             artifacts.push(CachedArtifact {
                 name: name.clone(),
                 version: version.to_owned(),
                 cached_at,
+                size_bytes: meta.map_or(0, |m| m.len()),
             });
         }
     }
     artifacts.sort();
-    CacheStats { artifacts }
+    CacheStats {
+        artifacts,
+        incomplete: false,
+    }
 }
 
 #[cfg(test)]
@@ -81,6 +94,7 @@ mod tests {
             .collect();
         assert_eq!(got, ["serde-1.0.0", "serde-2.0.0"]);
         assert!(stats.artifacts.iter().all(|a| a.cached_at > 0));
+        assert!(stats.artifacts.iter().all(|a| a.size_bytes == 1));
     }
 
     #[test]

@@ -101,7 +101,7 @@ async fn crates_registry_is_mounted_under_prefix() {
     let resp = app.get("/crates/index/config.json").await;
     assert_eq!(resp.status(), 200);
     let json: Value = resp.json().await.unwrap();
-    assert_eq!(json["dl"], "http://localhost:3080/crates/api/v1/crates");
+    assert_eq!(json["dl"], "http://127.0.0.1:3080/crates/api/v1/crates");
 
     // The old un-prefixed layout is gone.
     assert_eq!(app.get("/index/config.json").await.status(), 404);
@@ -144,7 +144,7 @@ async fn registries_serve_under_custom_mounts() {
     assert_eq!(resp.status(), 200);
     let json: Value = resp.json().await.unwrap();
     // ...and the generated download URL follows the mount, not the registry id.
-    assert_eq!(json["dl"], "http://localhost:3080/rust/api/v1/crates");
+    assert_eq!(json["dl"], "http://127.0.0.1:3080/rust/api/v1/crates");
 
     // The default path no longer routes.
     assert_eq!(app.get("/crates/index/config.json").await.status(), 404);
@@ -200,5 +200,5 @@ async fn root_mount_rewrites_urls_without_a_prefix() {
     .await;
 
     let json: Value = app.get("/index/config.json").await.json().await.unwrap();
-    assert_eq!(json["dl"], "http://localhost:3080/api/v1/crates");
+    assert_eq!(json["dl"], "http://127.0.0.1:3080/api/v1/crates");
 }

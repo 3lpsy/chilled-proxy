@@ -10,8 +10,9 @@ use chilled_core::valid::decode_path_once;
 use log::{debug, warn};
 
 use crate::routes::pypi::file::serve_file;
+use crate::routes::pypi::respond::{project_list, redirect_to_project};
 use crate::routes::pypi::route::{classify, Route};
-use crate::routes::pypi::serve::{project_list, redirect_to_project, serve_project};
+use crate::routes::pypi::serve::serve_project;
 use crate::state::AppState;
 
 /// Handles every request under the `/pypi` mount.

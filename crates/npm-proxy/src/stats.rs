@@ -11,8 +11,17 @@ use crate::valid;
 /// unreadable or malformed entries are skipped rather than failing the report.
 pub(crate) fn cache_stats(tarballs_dir: &Path) -> CacheStats {
     let mut artifacts = Vec::new();
-    let Ok(top_dirs) = std::fs::read_dir(tarballs_dir) else {
-        return CacheStats::default();
+    // A missing directory is an empty cache; any other error (fd exhaustion,
+    // I/O) must not read as empty or consumers would wrongly prune.
+    let top_dirs = match std::fs::read_dir(tarballs_dir) {
+        Ok(dirs) => dirs,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CacheStats::default(),
+        Err(_) => {
+            return CacheStats {
+                incomplete: true,
+                ..Default::default()
+            }
+        }
     };
 
     for top in top_dirs.flatten() {
@@ -47,7 +56,10 @@ pub(crate) fn cache_stats(tarballs_dir: &Path) -> CacheStats {
         }
     }
     artifacts.sort();
-    CacheStats { artifacts }
+    CacheStats {
+        artifacts,
+        incomplete: false,
+    }
 }
 
 /// Collects `{unscoped}-{version}.tgz` files from one package directory.
@@ -60,16 +72,17 @@ fn scan_tarballs(dir: &Path, full_name: &str, unscoped: &str, artifacts: &mut Ve
         let Some(version) = valid::tarball_version(unscoped, &file_name) else {
             continue;
         };
-        let cached_at = file
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
+        let meta = file.metadata().ok();
+        let cached_at = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_secs());
         artifacts.push(CachedArtifact {
             name: full_name.to_owned(),
             version,
             cached_at,
+            size_bytes: meta.map_or(0, |m| m.len()),
         });
     }
 }
@@ -108,6 +121,7 @@ mod tests {
             ["@scope/pkg@1.0.0", "lodash@4.17.20", "lodash@4.17.21"]
         );
         assert!(stats.artifacts.iter().all(|a| a.cached_at > 0));
+        assert!(stats.artifacts.iter().all(|a| a.size_bytes == 1));
     }
 
     #[test]

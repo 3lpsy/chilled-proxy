@@ -1,12 +1,14 @@
 //! PyPI route classification and handlers: `/simple/...` and `/files/...`.
 //!
-//! Split by role: path classification (`route`), the axum entry point
-//! (`handler`), the simple-index serve ladder (`serve`), upstream fetching and
-//! HTML normalization (`fetch`), and distribution files (`file`).
+//! Split by role: classification (`route`), entry point (`handler`), serve
+//! ladder (`serve`), responses (`respond`), cache (`cache`), fetch (`fetch`),
+//! and distribution files (`file`).
 
+mod cache;
 mod fetch;
 mod file;
 mod handler;
+mod respond;
 mod route;
 mod serve;
 

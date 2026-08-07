@@ -1,8 +1,7 @@
 //! `GET /index/<path>` — proxied, cached, age-gated sparse-index entries.
 //!
 //! Split by role: the axum entry point (`handler`), the cache/upstream serve
-//! ladder (`fetch`), and response building, filtering, and the cache
-//! (`serve`).
+//! ladder (`fetch`), and response building, filtering, and the cache (`serve`).
 
 mod fetch;
 mod handler;

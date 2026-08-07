@@ -1,15 +1,7 @@
-//! SSRF / URL-injection hardening.
-//!
-//! Crate names and versions are interpolated into `Url::join` (to build the
-//! upstream request) and into filesystem cache paths, so a crafted segment must
-//! never be able to change the upstream host/scheme or escape the cache dir.
-//! Validation restricts names/versions to the crates.io charset; these tests
-//! hammer that boundary with userinfo (`@`), scheme/port (`:`), host-like dots,
-//! and the percent-encoded delimiters `#`, `?`, `/`, `\`, and space — each of
-//! which must be rejected with `404` *before* any upstream request.
-//!
-//! Two positive tests confirm the complementary property: a query string or a
-//! fragment on an otherwise-valid request is dropped, not forwarded upstream.
+//! SSRF / URL-injection hardening: hostile crate names/versions (userinfo,
+//! scheme/port, traversal, percent-encoded delimiters) must 404 *before* any
+//! upstream request, since these segments feed `Url::join` and cache paths.
+//! Positive tests confirm queries/fragments are dropped, not forwarded.
 
 mod common;
 

@@ -1,8 +1,7 @@
 //! Crate name and version validation.
 //!
-//! Index/download path segments are attacker-controlled and fed into
-//! `Url::join` and cache paths; restricting them to the crates.io charset
-//! closes SSRF (`http:` scheme segments) and traversal (`..`, `/`).
+//! Attacker-controlled path segments feed `Url::join` and cache paths;
+//! restricting them to the crates.io charset closes SSRF and traversal.
 
 /// Maximum accepted crate name / version length (crates.io caps names at 64).
 const MAX_LEN: usize = 64;

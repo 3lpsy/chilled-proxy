@@ -7,9 +7,22 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# chilled-web is wasm32-only, so host builds exclude it via this explicit list.
+# Cargo has no glob-minus-one: new crates must be added here too.
+default-members = [
+    "crates/chilled-wire",
+    "crates/chilled-core",
+    "crates/chilled-proxy",
+    "crates/chilled-testkit",
+    "crates/chilled-api",
+    "crates/crates-proxy",
+    "crates/maven-proxy",
+    "crates/npm-proxy",
+    "crates/pypi-proxy",
+]
 
 [workspace.package]
-version = "0.1.6"
+version = "1.0.0"
 authors = ["3lpsy"]
 edition = "2021"
 homepage = "https://github.com/3lpsy/chilled-proxy"
@@ -34,7 +47,37 @@ md-5 = "0.10"
 percent-encoding = "2"
 wiremock = "0.6"
 tempfile = "3"
+sea-orm = { version = "2.0", default-features = false, features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+    "macros",
+    "with-json",
+] }
+sea-orm-migration = { version = "2.0", default-features = false, features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+] }
+argon2 = { version = "0.5", features = ["std"] }
+# Direct dep only to switch on OsRng for salt generation (argon2 re-exports it).
+password-hash = { version = "0.5", features = ["getrandom"] }
+include_dir = "0.7"
+getrandom = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower = { version = "0.5", features = ["util"] }
+dioxus = { version = "0.7.10", features = ["web", "router", "document"] }
+# Pinned exactly: the wasm-bindgen CLI that post-processes the wasm must match
+# the crate version in this lockfile (asserted by `just _ui-check-wbg`).
+wasm-bindgen = "=0.2.125"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
 
 [profile.release]
 lto = true
 strip = "debuginfo"
+
+# Small wasm for the UI; panic=abort drops unwinding machinery.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+panic = "abort"

@@ -1,11 +1,7 @@
-//! SSRF / traversal / URL-injection hardening.
-//!
-//! Project names and file paths are interpolated into `Url::join` (to build
-//! upstream requests) and into filesystem cache paths, so a crafted segment
-//! must never change the upstream host or escape the cache dir. Paths are
-//! percent-decoded exactly once (residual `%` rejects), names are held to the
-//! PEP 503 charset, and file paths to the `packages/…` shape — every vector
-//! here must be rejected *before* any upstream request.
+//! SSRF / traversal / URL-injection hardening: hostile project names and file
+//! paths (which feed `Url::join` and cache paths) must be rejected *before*
+//! any upstream request. Paths are percent-decoded exactly once, names held
+//! to the PEP 503 charset, and file paths to a clean bounded shape.
 
 mod common;
 
@@ -63,13 +59,10 @@ async fn file_injection_vectors_are_rejected() {
 
 #[tokio::test]
 async fn a_clean_path_of_an_unknown_layout_is_forwarded_and_404s() {
-    // Supporting indexes whose file layout is not PyPI's (PyTorch serves
-    // `whl/cpu/<file>`) means a clean, bounded path no longer has to match
-    // `packages/<a>/<b>/<hash>` to be tried. Such a path reaches the *pinned*
-    // files host and 404s there; it can never name a different host, escape the
-    // host's root, or carry a traversal segment — those stay rejected locally,
-    // which `file_injection_vectors_are_rejected` and the `validate_fhp_path`
-    // unit tests both cover.
+    // Non-PyPI layouts (PyTorch's `whl/cpu/<file>`) mean a clean, bounded
+    // path no longer must match `packages/<a>/<b>/<hash>`: it reaches the
+    // *pinned* files host and 404s there. Hostile paths (other hosts,
+    // traversal) stay rejected locally, covered by the injection tests.
     let proxy = TestProxy::builder().start_proxy().await;
     proxy.mock_file_status("f.whl", 404).await;
 

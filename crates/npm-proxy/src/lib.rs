@@ -1,14 +1,13 @@
 //! Caching npm registry proxy with packument age-gating (cooldown).
 //!
-//! Serves the npm registry protocol relative to its mount prefix (`/npm` in
-//! chilled-proxy): packuments, per-version docs, and tarball downloads.
-//! Tarball bytes are never modified — only packument metadata is filtered,
-//! and its tarball URLs are rewritten to point back at this proxy.
+//! Serves packuments, per-version docs, and tarball downloads. Tarball bytes
+//! are never modified — only packument metadata is filtered and rewritten.
 
 pub(crate) mod constants;
 pub(crate) mod filter;
 pub(crate) mod http;
 pub(crate) mod model;
+pub(crate) mod purge;
 pub(crate) mod routes;
 pub(crate) mod state;
 pub(crate) mod stats;
@@ -97,5 +96,13 @@ impl RegistryProxy for NpmProxy {
 
     fn cache_stats(&self) -> CacheStats {
         stats::cache_stats(&self.state.config.tarballs_dir)
+    }
+
+    fn purge_artifact(&self, name: &str, version: &str) -> Vec<String> {
+        purge::purge_artifact(&self.state.config.tarballs_dir, name, version)
+    }
+
+    fn purge_all(&self) {
+        purge::purge_all(&self.state.config.tarballs_dir);
     }
 }

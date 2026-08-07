@@ -5,20 +5,66 @@
 # with cooldown age-gating; see README.md for attribution.
 #
 
-### First stage: Build the application itself.
-FROM rust:alpine AS builder
-
+### Chef base: toolchain + cargo-chef, shared by both build stages. The
+### expensive layers below (chef cook) rebuild only when a manifest or the
+### lockfile changes — source edits reuse the compiled-dependency layers.
+FROM rust:alpine AS chef
 WORKDIR /builds/chilled-proxy
+RUN apk add --no-cache musl-dev build-base && cargo install cargo-chef --locked
 
+### Planner: distill the workspace into a dependency recipe.
+FROM chef AS planner
 # Copy source data (see .dockerignore for excludes).
 COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Build deps: musl-dev plus the toolchain aws-lc-rs (rustls crypto backend,
-# pulled in by reqwest's rustls-tls) needs on Alpine — a C/C++ compiler, cmake,
-# and clang/libclang for bindgen.
+### UI stage: compile the Dioxus SPA to wasm and bindgen it into /dist.
+FROM chef AS ui-builder
+
+# Must equal the wasm-bindgen version in Cargo.lock (asserted below): the CLI
+# and the crate speak a matched ABI.
+ARG WASM_BINDGEN_VERSION=0.2.125
+
 RUN \
-apk add --no-cache musl-dev build-base cmake clang-dev && \
-cargo build --release -p chilled-proxy
+rustup target add wasm32-unknown-unknown && \
+cargo install --root /wbg wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
+
+# Dependency layer: cook the wasm dep graph from the recipe alone.
+COPY --from=planner /builds/chilled-proxy/recipe.json recipe.json
+RUN cargo chef cook --recipe-path recipe.json \
+  -p chilled-ui --profile wasm-release --target wasm32-unknown-unknown
+
+COPY . .
+
+RUN \
+want="$(awk '/^name = "wasm-bindgen"$/{f=1} f && /^version = /{gsub(/[",]/,"",$3); print $3; exit}' Cargo.lock)" && \
+if [ "$want" != "${WASM_BINDGEN_VERSION}" ]; then \
+  echo "error: Cargo.lock wants wasm-bindgen $want, ARG says ${WASM_BINDGEN_VERSION}" >&2; exit 1; \
+fi && \
+cargo build --locked -p chilled-ui --profile wasm-release --target wasm32-unknown-unknown && \
+mkdir -p /dist && \
+/wbg/bin/wasm-bindgen --target web --no-typescript --out-dir /dist --out-name chilled-ui \
+  target/wasm32-unknown-unknown/wasm-release/chilled-ui.wasm && \
+cp crates/chilled-ui/index.html crates/chilled-ui/assets/style.css /dist/
+
+### First stage: Build the application itself.
+FROM chef AS builder
+
+# Extra build deps the toolchain aws-lc-rs (rustls crypto backend, pulled in
+# by reqwest's rustls-tls) needs on Alpine: cmake and clang/libclang for bindgen.
+RUN apk add --no-cache cmake clang-dev
+
+# Dependency layer: cook the server dep graph from the recipe alone.
+COPY --from=planner /builds/chilled-proxy/recipe.json recipe.json
+RUN cargo chef cook --recipe-path recipe.json --release -p chilled-proxy
+
+COPY . .
+
+# The built UI lands in dist/ before the server build so include_dir! embeds
+# it — the binary is the whole deploy.
+COPY --from=ui-builder /dist dist/
+
+RUN cargo build --release --locked -p chilled-proxy
 
 ### Second stage: Copy the built application into the runtime image.
 FROM alpine:latest AS runner
@@ -30,11 +76,12 @@ LABEL maintainer="3lpsy"
 # Install the compiled executable into the system.
 COPY --from=builder /builds/chilled-proxy/target/release/chilled-proxy /usr/bin/chilled-proxy
 
-# Add the proxy service user and create the cache directory writable by it.
+# Add the proxy service user and create the cache directory plus the UI
+# database directory writable by it.
 RUN \
 adduser -SHD -u 777 -h /var/empty -s /sbin/nologin -g "chilled-proxy" app && \
-mkdir /var/cache/chilled && \
-chown app /var/cache/chilled
+mkdir /var/cache/chilled /var/lib/chilled && \
+chown app /var/cache/chilled /var/lib/chilled
 
 # Switch to the service user to run the proxy process.
 USER app
@@ -95,6 +142,22 @@ EXPOSE 3080
 #   CHILLED_<NAME>_HEADERS       'X-Build: ci; X-Team: platform'
 # Prefer these over --upstream-basic-auth / --upstream-header: an argv value is
 # readable from `ps`. Mount the values as secrets rather than baking them in.
+#
+# Web UI + management API (all off unless CHILLED_UI is set):
+#   CHILLED_UI                   serve /ui + /api (boolean)
+#   CHILLED_UI_AUTH              builtin | oidc                    (builtin)
+#   CHILLED_UI_OIDC_USER_HEADER  trusted identity header (oidc; required),
+#                                e.g. x-auth-request-email from oauth2-proxy
+#   CHILLED_UI_OIDC_LOGIN_URL    navbar Login target in oidc mode, e.g. /oauth2/sign_in
+#   CHILLED_UI_PUBLIC_READONLY_ENABLED  unauthenticated read access to state APIs (boolean)
+#   CHILLED_UI_CACHE_UPDATE_INTERVAL    snapshot interval, e.g. 10m  (10m, min 30s)
+#   CHILLED_UI_TRUST_FIRST_USER_SIGNUP  first visitor creates the account
+#                                       (builtin only; boolean)
+#   CHILLED_UI_ADMIN_USERNAME / _PASSWORD  bootstrap user (builtin only)
+#   CHILLED_UI_DB_PATH           sqlite file            (/var/lib/chilled/chilled.db)
+#   CHILLED_UI_SESSION_TTL       login lifetime, e.g. 7d (7d)
+# Persist /var/lib/chilled alongside /var/cache/chilled: users and the cache
+# table live there, and it deliberately survives cache wipes.
 
 # Run the proxy server (info logging to stdout). ENTRYPOINT (not CMD) so that
 # flags passed to `docker run <image> --flag ...` append to the binary instead

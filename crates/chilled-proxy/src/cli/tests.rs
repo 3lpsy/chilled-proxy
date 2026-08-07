@@ -25,7 +25,7 @@ fn defaults_are_general() {
         assert_eq!(s.cache_dir, Path::new("/var/cache/chilled").join(kind.id()));
         assert_eq!(
             s.proxy_url.as_str(),
-            format!("http://localhost:3080/{kind}/")
+            format!("http://127.0.0.1:3080/{kind}/")
         );
     }
 }
@@ -120,7 +120,7 @@ fn proxy_url_gets_trailing_slash_and_derived_default() {
         cli.registry_settings(RegistryKind::Crates)
             .proxy_url
             .as_str(),
-        "http://localhost:9999/crates/"
+        "http://127.0.0.1:9999/crates/"
     );
     let cli = parse(&["--listen", "proxy.lan:8080"]);
     assert_eq!(
@@ -267,7 +267,7 @@ fn derived_proxy_url_follows_the_mount() {
     ]);
     assert_eq!(
         cli.registry_settings(RegistryKind::Npm).proxy_url.as_str(),
-        "http://localhost:3080/"
+        "http://127.0.0.1:3080/"
     );
 }
 
@@ -371,7 +371,7 @@ fn an_extra_mount_gets_its_own_upstream_path_and_cache() {
     );
     assert_eq!(
         plugins.settings.proxy_url.as_str(),
-        "http://localhost:3080/plugins/"
+        "http://127.0.0.1:3080/plugins/"
     );
     // The registry's own mount is untouched.
     assert_eq!(instance(&instances, "maven").path, "/maven");
@@ -527,7 +527,7 @@ fn gradles_other_upstreams_are_mounted_out_of_the_box() {
     );
     assert_eq!(
         portal.settings.proxy_url.as_str(),
-        "http://localhost:3080/gradle-plugins/"
+        "http://127.0.0.1:3080/gradle-plugins/"
     );
     assert!(cli.check_mounts().is_ok());
 }
@@ -926,4 +926,123 @@ fn a_mount_size_cap_beats_the_registry_and_general_ones() {
     // And an unrelated registry keeps the general value.
     let npm = instances.iter().find(|i| i.name == "npm").unwrap();
     assert_eq!(npm.settings.max_artifact_size, 300 * 1024 * 1024);
+}
+
+// ---------------------------------------------------------------------------
+// Web UI flag resolution (`--ui-*`).
+// ---------------------------------------------------------------------------
+
+mod ui {
+    use std::path::PathBuf;
+
+    use chilled_api::{AuthMode, UiConfig};
+    use clap::Parser;
+
+    use crate::cli::ui::{resolve_ui, DEFAULT_CACHE_UPDATE_INTERVAL, DEFAULT_SESSION_TTL};
+    use crate::cli::Cli;
+    use crate::constants::DEFAULT_UI_DB_PATH;
+
+    fn resolve(args: &[&str]) -> Result<Option<UiConfig>, String> {
+        let argv: Vec<&str> = std::iter::once("chilled-proxy")
+            .chain(args.iter().copied())
+            .collect();
+        resolve_ui(&Cli::try_parse_from(argv).expect("argv parses"))
+    }
+
+    #[test]
+    fn off_by_default_but_rejects_stray_ui_flags() {
+        assert!(resolve(&[]).unwrap().is_none());
+        let err = resolve(&["--ui-auth", "builtin"]).unwrap_err();
+        assert!(err.contains("--ui-auth"), "{err}");
+        let err = resolve(&["--ui-public-readonly-enabled"]).unwrap_err();
+        assert!(err.contains("--ui is not enabled"), "{err}");
+    }
+
+    #[test]
+    fn builtin_defaults() {
+        let ui = resolve(&["--ui"]).unwrap().unwrap();
+        assert_eq!(ui.auth_mode, AuthMode::Builtin);
+        assert_eq!(ui.cache_update_interval, DEFAULT_CACHE_UPDATE_INTERVAL);
+        assert_eq!(ui.session_ttl, DEFAULT_SESSION_TTL);
+        assert_eq!(ui.db_path, PathBuf::from(DEFAULT_UI_DB_PATH));
+        assert!(!ui.public_readonly && !ui.trust_first_user_signup);
+    }
+
+    #[test]
+    fn oidc_requires_and_lowercases_the_user_header() {
+        let err = resolve(&["--ui", "--ui-auth", "oidc"]).unwrap_err();
+        assert!(err.contains("--ui-oidc-user-header"), "{err}");
+
+        let ui = resolve(&[
+            "--ui",
+            "--ui-auth",
+            "oidc",
+            "--ui-oidc-user-header",
+            "X-Auth-Request-Email",
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(ui.oidc_user_header.as_deref(), Some("x-auth-request-email"));
+
+        let err = resolve(&[
+            "--ui",
+            "--ui-auth",
+            "oidc",
+            "--ui-oidc-user-header",
+            "bad header",
+        ])
+        .unwrap_err();
+        assert!(err.contains("invalid"), "{err}");
+    }
+
+    #[test]
+    fn oidc_only_flags_rejected_in_builtin_mode() {
+        for args in [
+            &["--ui", "--ui-oidc-user-header", "x-user"][..],
+            &["--ui", "--ui-oidc-login-url", "/oauth2/sign_in"][..],
+        ] {
+            let err = resolve(args).unwrap_err();
+            assert!(err.contains("--ui-auth oidc"), "{err}");
+        }
+    }
+
+    #[test]
+    fn oidc_mode_rejects_builtin_only_knobs() {
+        let oidc = &["--ui", "--ui-auth", "oidc", "--ui-oidc-user-header", "x-u"];
+        let err = resolve(&[oidc, &["--ui-trust-first-user-signup"][..]].concat()).unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
+        let err = resolve(
+            &[
+                oidc,
+                &["--ui-admin-username", "a", "--ui-admin-password", "b"][..],
+            ]
+            .concat(),
+        )
+        .unwrap_err();
+        assert!(err.contains("incompatible"), "{err}");
+    }
+
+    #[test]
+    fn admin_credentials_must_come_together() {
+        let err = resolve(&["--ui", "--ui-admin-username", "admin"]).unwrap_err();
+        assert!(err.contains("together"), "{err}");
+        let err = resolve(&["--ui", "--ui-admin-password", "pw"]).unwrap_err();
+        assert!(err.contains("together"), "{err}");
+        assert!(resolve(&[
+            "--ui",
+            "--ui-admin-username",
+            "admin",
+            "--ui-admin-password",
+            "pw"
+        ])
+        .is_ok());
+    }
+
+    #[test]
+    fn interval_floor_and_bad_mode() {
+        let err = resolve(&["--ui", "--ui-cache-update-interval", "5s"]).unwrap_err();
+        assert!(err.contains("at least"), "{err}");
+        let err = resolve(&["--ui", "--ui-auth", "saml"]).unwrap_err();
+        assert!(err.contains("builtin or oidc"), "{err}");
+    }
 }

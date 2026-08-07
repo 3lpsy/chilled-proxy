@@ -321,4 +321,56 @@ pub struct Cli {
         value_delimiter = ';'
     )]
     pub upstream_headers: Vec<String>,
+
+    // Web UI and management API (all off unless --ui is set).
+    /// Serve the embedded web UI at /ui and the management API at /api.
+    #[arg(long, env = "CHILLED_UI", value_parser = BoolishValueParser::new())]
+    pub ui: bool,
+
+    /// UI auth mode: builtin (username/password) or oidc (trusted proxy header).
+    #[arg(long, env = "CHILLED_UI_AUTH")]
+    pub ui_auth: Option<String>,
+
+    /// Trusted identity header for oidc mode (e.g. x-auth-request-email).
+    #[arg(long, env = "CHILLED_UI_OIDC_USER_HEADER")]
+    pub ui_oidc_user_header: Option<String>,
+
+    /// Where the UI Login button points in oidc mode (e.g. /oauth2/sign_in).
+    #[arg(long, env = "CHILLED_UI_OIDC_LOGIN_URL")]
+    pub ui_oidc_login_url: Option<String>,
+
+    /// Let unauthenticated visitors read the UI's state APIs.
+    #[arg(long, env = "CHILLED_UI_PUBLIC_READONLY_ENABLED", value_parser = BoolishValueParser::new())]
+    pub ui_public_readonly_enabled: bool,
+
+    /// How often the cache state is snapshotted to sqlite (suffixes s, m, h, d;
+    /// default 10m).
+    #[arg(long, env = "CHILLED_UI_CACHE_UPDATE_INTERVAL", value_parser = cooldown::parse_duration)]
+    pub ui_cache_update_interval: Option<Duration>,
+
+    /// While no users exist, let the first UI visitor create the account
+    /// (builtin mode only).
+    #[arg(long, env = "CHILLED_UI_TRUST_FIRST_USER_SIGNUP", value_parser = BoolishValueParser::new())]
+    pub ui_trust_first_user_signup: bool,
+
+    /// Create this UI user at startup if missing (builtin mode only).
+    #[arg(long, env = "CHILLED_UI_ADMIN_USERNAME")]
+    pub ui_admin_username: Option<String>,
+
+    /// Password for --ui-admin-username. Prefer the env var: an argv value is
+    /// visible to anything that can read `ps`.
+    #[arg(long, env = "CHILLED_UI_ADMIN_PASSWORD")]
+    pub ui_admin_password: Option<String>,
+
+    /// Sqlite database file backing the UI (default /var/lib/chilled/chilled.db).
+    #[arg(long, env = "CHILLED_UI_DB_PATH")]
+    pub ui_db_path: Option<String>,
+
+    /// UI login session lifetime (suffixes s, m, h, d, w; default 7d).
+    #[arg(long, env = "CHILLED_UI_SESSION_TTL", value_parser = cooldown::parse_duration)]
+    pub ui_session_ttl: Option<Duration>,
+
+    /// Dev override: serve the UI from this directory instead of the embedded copy.
+    #[arg(long, env = "CHILLED_UI_DEV_DIST_DIR")]
+    pub ui_dev_dist_dir: Option<String>,
 }

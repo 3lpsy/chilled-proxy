@@ -1,5 +1,4 @@
-//! Packument serving: validators, the cache/upstream ladder, filtering, and
-//! the per-version document carved out of a filtered packument.
+//! Packument serving: validators, the cache/upstream ladder, and filtering.
 
 use axum::{
     body::Body,
@@ -9,7 +8,7 @@ use axum::{
 use bytes::Bytes;
 use chilled_core::cache::MEMO_BUCKET_SECS;
 use chilled_core::etag::{etag_marker, filtered_etag, rewrite_etag, unmark_etag, Marker};
-use chilled_core::http::{conditional_get, error_response, json_response, FetchError};
+use chilled_core::http::{error_response, json_response};
 use log::{debug, error, info, warn};
 
 use crate::constants::PACKUMENT_CTYPE;
@@ -19,26 +18,17 @@ use crate::model::{NpmEntry, PackageRef};
 use crate::routes::npm::cache::{
     cache_find_packument, cache_read_packument, cache_write_packument,
 };
+use crate::routes::npm::fetch::download_packument;
 use crate::state::AppState;
 use crate::Config;
 
-enum Served {
+pub(super) enum Served {
     /// The client's cached copy is valid at the current window.
     NotModified(NpmEntry),
     /// Filtered+rewritten packument body, ready to wrap in a response.
     Body(NpmEntry, Bytes),
     /// A ready-made error or forwarded response.
     Done(Response),
-}
-
-/// Packument download result.
-pub(super) struct PackumentResponse {
-    /// Entry with updated response metadata (etag / last-modified).
-    pub(super) entry: NpmEntry,
-    /// Upstream HTTP response status code.
-    pub(super) status: u16,
-    /// Upstream HTTP response body.
-    pub(super) data: Vec<u8>,
 }
 
 /// Attaches the cooldown-aware ETag. Served bodies are always rewritten, so
@@ -108,7 +98,7 @@ pub(super) async fn handle_packument(
 }
 
 /// The packument serve ladder: warm metadata, disk cache, then upstream.
-async fn serve_packument(
+pub(super) async fn serve_packument(
     state: &AppState,
     pkg: &PackageRef,
     client_entry: NpmEntry,
@@ -290,77 +280,4 @@ async fn filtered_served(
             Served::Done(error_response(500))
         }
     }
-}
-
-/// Downloads a full packument, sending the conditional headers from `entry`.
-pub(super) async fn download_packument(
-    state: &AppState,
-    mut entry: NpmEntry,
-    pkg: &PackageRef,
-) -> Result<PackumentResponse, FetchError> {
-    // Charset-validated names cannot break `Url::join`.
-    let url = state
-        .config
-        .upstream_url
-        .join(&pkg.upstream_packument_rel())
-        .expect("validated packument URL");
-
-    // Full doc only — the abbreviated "corgi" form lacks the `time` map needed
-    // for cooldown.
-    let response = conditional_get(
-        &state.client,
-        url,
-        Some(PACKUMENT_CTYPE),
-        &mut entry,
-        state.config.settings.max_metadata_size,
-    )
-    .await?;
-
-    Ok(PackumentResponse {
-        entry,
-        status: response.status,
-        data: response.data,
-    })
-}
-
-// --- Version docs ---
-
-/// Handles a version doc request (`GET /{name}/{version}`), derived from the
-/// filtered packument so hidden versions stay hidden.
-pub(super) async fn handle_version_doc(
-    state: &AppState,
-    pkg: &PackageRef,
-    version: &str,
-) -> Response {
-    match serve_packument(state, pkg, NpmEntry::new(), false).await {
-        Served::Body(_, body) => {
-            let version = version.to_owned();
-            let extracted =
-                tokio::task::spawn_blocking(move || extract_version_doc(&body, &version)).await;
-            match extracted {
-                Ok(Some(doc)) => json_response(200, doc),
-                Ok(None) => json_response(404, format_npm_error("Not found")),
-                Err(err) => {
-                    error!("proxy: version doc task failed for {pkg}: {err}");
-                    error_response(500)
-                }
-            }
-        }
-        Served::Done(response) => response,
-        // Unreachable: version doc requests carry no client validators.
-        Served::NotModified(_) => error_response(500),
-    }
-}
-
-/// Extracts one version object from a serialized (filtered) packument.
-fn extract_version_doc(body: &[u8], version: &str) -> Option<String> {
-    let doc: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let versions = doc.get("versions")?;
-    // npm also resolves dist-tags here (`GET /pkg/latest`). The tags were
-    // already repaired by the filter, so a tag can only name a served version.
-    let entry = versions.get(version).or_else(|| {
-        let target = doc.get("dist-tags")?.get(version)?.as_str()?;
-        versions.get(target)
-    })?;
-    serde_json::to_string(entry).ok()
 }

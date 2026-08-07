@@ -5,9 +5,8 @@ use percent_encoding::percent_decode_str;
 
 /// Percent-decodes a raw URI path exactly once, rejecting anything that could
 /// smuggle a second layer: residual `%`, backslashes, control bytes, or NUL.
-///
-/// SSRF/traversal-load-bearing: registries route on the decoded output and must
-/// never decode again.
+/// SSRF/traversal-load-bearing: registries route on the decoded output and
+/// must never decode again.
 pub fn decode_path_once(raw: &str) -> Option<String> {
     let decoded = percent_decode_str(raw).decode_utf8().ok()?;
     if decoded.contains('%')

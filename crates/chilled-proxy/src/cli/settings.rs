@@ -102,9 +102,8 @@ impl Cli {
             None => parse_overrides(&self.cooldown_overrides),
         };
 
-        // `--<registry>-proxy-url` names the registry's own mount, so it applies
-        // to the default instance only; any other mount states its own or has it
-        // derived from its path.
+        // `--<registry>-proxy-url` applies to the registry's default instance
+        // only; any other mount states its own or derives it from its path.
         let proxy_url = match spec {
             Some(spec) => spec.proxy_url.clone(),
             None if name == kind.id() => proxy_url.clone(),
@@ -157,12 +156,15 @@ impl Cli {
                 .expect("valid reverse-proxy mount URL");
         }
         let host_port = match self.listen.rsplit_once(':') {
-            // An all-interfaces bind has no routable host; default to localhost.
+            // An all-interfaces bind has no routable host. Use the 127.0.0.1
+            // literal, not "localhost": dual-stack clients resolve localhost
+            // to ::1 first, which container port forwards accept and then
+            // reset when the server side is IPv4-only.
             Some((h, p)) if h != "0.0.0.0" && h != "[::]" && h != "::" => {
                 format!("{h}:{p}")
             }
-            Some((_, p)) => format!("localhost:{p}"),
-            None => "localhost:3080".to_string(),
+            Some((_, p)) => format!("127.0.0.1:{p}"),
+            None => "127.0.0.1:3080".to_string(),
         };
         let mount = mount.trim_end_matches('/');
         Url::parse(&format!("http://{host_port}{mount}/")).expect("valid derived proxy URL")

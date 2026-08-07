@@ -16,21 +16,37 @@ const CHECKSUM_EXTS: &[&str] = &[".sha1", ".md5", ".sha256", ".sha512", ".asc"];
 /// Scans the repository cache into sorted [`CacheStats`]. Best-effort:
 /// unreadable or malformed entries are skipped rather than failing the report.
 pub(crate) fn cache_stats(repo_dir: &Path) -> CacheStats {
+    // A missing directory is an empty cache; any other error (fd exhaustion,
+    // I/O) must not read as empty or consumers would wrongly prune.
+    match std::fs::read_dir(repo_dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return CacheStats::default(),
+        Err(_) => {
+            return CacheStats {
+                incomplete: true,
+                ..Default::default()
+            }
+        }
+    }
     let mut artifacts = Vec::new();
     let mut segs = Vec::new();
     walk(repo_dir, &mut segs, &mut artifacts);
     artifacts.sort();
     // One cached version yields several files (jar, pom, ...); report it once,
-    // stamped with the newest of them, so counts mean the same thing as in the
-    // other registries.
+    // stamped with the newest of them and sized as their sum, so counts mean
+    // the same thing as in the other registries.
     artifacts.dedup_by(|dup, kept| {
         let same = dup.name == kept.name && dup.version == kept.version;
         if same {
             kept.cached_at = kept.cached_at.max(dup.cached_at);
+            kept.size_bytes += dup.size_bytes;
         }
         same
     });
-    CacheStats { artifacts }
+    CacheStats {
+        artifacts,
+        incomplete: false,
+    }
 }
 
 /// Recursively collects artifact files at `{group...}/{artifact}/{version}/{file}`,
@@ -66,16 +82,17 @@ fn walk(dir: &Path, segs: &mut Vec<String>, out: &mut Vec<CachedArtifact>) {
         let version = segs[segs.len() - 1].clone();
         let artifact = &segs[segs.len() - 2];
         let group = segs[..segs.len() - 2].join(".");
-        let cached_at = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
+        let meta = entry.metadata().ok();
+        let cached_at = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_secs());
         out.push(CachedArtifact {
             name: format!("{group}:{artifact}"),
             version,
             cached_at,
+            size_bytes: meta.map_or(0, |m| m.len()),
         });
     }
 }
@@ -110,6 +127,8 @@ mod tests {
         assert_eq!(artifact.name, "org.apache.commons:commons-lang3");
         assert_eq!(artifact.version, "3.14.0");
         assert!(artifact.cached_at > 0);
+        // jar (3 bytes) + pom (3 bytes), sidecars excluded.
+        assert_eq!(artifact.size_bytes, 6);
     }
 
     #[test]
@@ -152,5 +171,6 @@ mod tests {
         assert_eq!(stats.artifacts.len(), 1);
         assert_eq!(stats.artifacts[0].name, "com.example:thing");
         assert_eq!(stats.artifacts[0].version, "1.0.0");
+        assert_eq!(stats.artifacts[0].size_bytes, 2);
     }
 }

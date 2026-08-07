@@ -3,11 +3,9 @@
 use crate::kind::RegistryKind;
 
 /// Extra mounts served by default, as `(registry, name, path, upstream)`.
-///
-/// A Gradle build resolves from three Maven-layout repositories, and gating
-/// only Central leaves plugins and AndroidX ungated — the two easiest holes to
-/// miss — so the other two are mounted out of the box. A `--<registry>-mount`
-/// of the same name replaces the entry; `--no-default-mounts` drops them all.
+/// Gating only Maven Central leaves Gradle plugins and AndroidX ungated, so
+/// those repositories are mounted out of the box. A `--<registry>-mount` of
+/// the same name replaces an entry; `--no-default-mounts` drops them all.
 pub(crate) const DEFAULT_MOUNTS: &[(RegistryKind, &str, &str, &str)] = &[
     (
         RegistryKind::Maven,
@@ -28,6 +26,12 @@ pub(crate) const LISTEN_ADDRESS: &str = "0.0.0.0:3080";
 
 /// Default cache directory (each registry gets a subdirectory).
 pub(crate) const DEFAULT_CACHE_DIR: &str = "/var/cache/chilled";
+
+/// Default UI database path — outside the cache dir so cache wipes keep users.
+pub(crate) const DEFAULT_UI_DB_PATH: &str = "/var/lib/chilled/chilled.db";
+
+/// Floor for `--ui-cache-update-interval`: scans stat every cached file.
+pub(crate) const MIN_UI_CACHE_UPDATE_INTERVAL_SECS: u64 = 30;
 
 /// Default metadata cache entry Time-to-Live in seconds.
 pub(crate) const DEFAULT_CACHE_TTL_SECS: u64 = 3600;

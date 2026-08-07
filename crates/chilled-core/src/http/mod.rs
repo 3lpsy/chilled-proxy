@@ -1,6 +1,9 @@
 //! HTTP plumbing shared across registries: response builders, capped upstream
 //! fetch, and HTTP-date handling.
 
+#[cfg(test)]
+mod tests;
+
 pub mod conditional;
 pub mod fetch;
 pub mod httpdate;

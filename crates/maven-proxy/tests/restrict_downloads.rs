@@ -50,11 +50,9 @@ async fn too_new_version_is_403() {
 
 #[tokio::test]
 async fn absent_version_is_404_not_403() {
-    // A mount serves one repository, and a multi-repository build asks each of
-    // them for artifacts only another one carries. Upstream answering 404 is a
-    // definite "not here", not an undatable version: reporting it as gated
-    // sends the user hunting a cooldown problem that does not exist, and
-    // records a first-seen stamp for a version that is not there.
+    // A multi-repository build asks each mount for artifacts only another one
+    // carries. Upstream's 404 is a definite "not here", not an undatable
+    // version: reporting it as gated would fake a cooldown problem.
     let proxy = TestProxy::builder()
         .cooldown_days(7)
         .restrict_downloads()

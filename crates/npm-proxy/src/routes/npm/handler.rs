@@ -8,9 +8,10 @@ use axum::{
 use chilled_core::http::{error_response, method_not_allowed};
 use log::warn;
 
-use crate::routes::npm::packument::{handle_packument, handle_version_doc};
+use crate::routes::npm::packument::handle_packument;
 use crate::routes::npm::route::{parse_request, NpmRequest};
 use crate::routes::npm::tarball::handle_tarball;
+use crate::routes::npm::version_doc::handle_version_doc;
 use crate::state::AppState;
 
 pub(crate) async fn handle_npm(

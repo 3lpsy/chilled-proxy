@@ -53,3 +53,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --locked
+
+      # The web UI is wasm32-only at runtime; type-check it for its real target.
+      - name: Check the web UI (wasm32)
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check -p chilled-ui --target wasm32-unknown-unknown --locked

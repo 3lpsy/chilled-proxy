@@ -1,5 +1,7 @@
-use super::*;
+use super::TestServerBuilder;
 use axum::routing::get;
+use axum::Router;
+use std::time::Duration;
 
 #[tokio::test]
 async fn builder_wires_settings_and_serves_under_prefix() {

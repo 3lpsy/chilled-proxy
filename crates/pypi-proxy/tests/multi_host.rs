@@ -1,10 +1,7 @@
-//! Indexes that spread their files across several hosts.
-//!
-//! PyPI keeps every file on one host, but an index is free not to: the PyTorch
-//! index links `torch` at its own CDN, its dependencies at PyPI's, and some
-//! wheels relatively. A mount reconstructing every download against one pinned
-//! host can only ever serve one of those slices, so the file's host is read
-//! from the index document instead — but only when the operator allows it.
+//! Indexes that spread their files across several hosts (PyTorch links
+//! `torch` at its own CDN, its dependencies at PyPI's, some wheels
+//! relatively): the file's host is read from the index document rather than
+//! reconstructed against one pinned host — but only when the operator allows it.
 
 mod common;
 

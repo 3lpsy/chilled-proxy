@@ -11,7 +11,32 @@ pub enum ListenAddress {
     UnixPath(String),
 }
 
-/// Serves `app` on an already-bound TCP listener until killed.
+/// Resolves when SIGINT (Ctrl+C) or SIGTERM arrives. Installing handlers also
+/// makes the signals work as container PID 1, which discards unhandled ones.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    info!("proxy: shutdown signal received, draining connections");
+}
+
+/// Serves `app` on an already-bound TCP listener until killed or signalled.
 ///
 /// Exposed for embedding/tests: bind an ephemeral port, read `local_addr`, then
 /// drive the router over real HTTP.
@@ -22,11 +47,12 @@ pub async fn serve_listener(listener: tokio::net::TcpListener, app: Router) {
         let _ = stream.set_nodelay(true);
     });
     axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("HTTP server error");
 }
 
-/// Binds the listener and serves until killed.
+/// Binds the listener and serves until killed or signalled.
 pub async fn serve(listen_addr: ListenAddress, app: Router) {
     match listen_addr {
         ListenAddress::SocketAddr(addr) => {
@@ -43,6 +69,7 @@ pub async fn serve(listen_addr: ListenAddress, app: Router) {
             let listener = tokio::net::UnixListener::bind(&path)
                 .unwrap_or_else(|e| panic!("failed to bind {path}: {e}"));
             axum::serve(listener, app.into_make_service())
+                .with_graceful_shutdown(shutdown_signal())
                 .await
                 .expect("HTTP server error");
         }

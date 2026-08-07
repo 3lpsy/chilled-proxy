@@ -1,10 +1,8 @@
 //! Converting scanned anchors into a PEP 691 document.
 //!
-//! PEP 503 carries the hash in the href fragment. PEP 700's `upload-time` has no
-//! standardized HTML spelling, but indexes that publish one (PyTorch, devpi) use
-//! a `data-upload-time` attribute, and reading it is what lets those be
-//! age-gated at all. An index without it yields entries with no `upload-time`,
-//! which the filter already treats as undatable and drops under a cooldown.
+//! Hashes come from the href fragment (PEP 503), upload times from the
+//! `data-upload-time` attribute some indexes publish (PyTorch, devpi);
+//! entries without one stay undatable and drop under a cooldown.
 
 use serde_json::{Map, Value};
 use url::Url;

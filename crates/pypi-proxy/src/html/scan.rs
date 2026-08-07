@@ -1,9 +1,7 @@
 //! A targeted `<a>` scanner for simple-index pages.
 //!
-//! A simple index is a flat list of anchors, so a focused scanner covers it
-//! without adding an HTML parser dependency — the same call made for the
-//! hand-rolled httpdate and base64 elsewhere in the workspace. It is tolerant by
-//! design: a malformed anchor is skipped, never fatal to the page.
+//! A simple index is a flat list of anchors, so a focused scanner avoids an
+//! HTML parser dependency. Tolerant: a malformed anchor is skipped, not fatal.
 
 /// A parsed open tag: its attributes, the offset past `>`, and whether it
 /// closed itself.

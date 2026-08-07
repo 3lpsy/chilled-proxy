@@ -62,7 +62,9 @@ impl TestApp {
         TestApp::start_bare(&args).await
     }
 
-    /// Starts the app with only `--cache-dir <tmp>` plus `args`.
+    /// Starts the app with only `--cache-dir <tmp>` plus `args`. Goes through
+    /// [`chilled_proxy::build_full_app`] so `--ui` runs work too; the UI
+    /// database (if any) defaults into the temp cache dir.
     pub async fn start_bare(args: &[String]) -> TestApp {
         let tmp = TempDir::new().unwrap();
         let mut argv = vec![
@@ -71,10 +73,16 @@ impl TestApp {
             tmp.path().to_string_lossy().into_owned(),
         ];
         argv.extend(args.iter().cloned());
+        if argv.iter().any(|a| a == "--ui") && !argv.iter().any(|a| a == "--ui-db-path") {
+            argv.push("--ui-db-path".into());
+            argv.push(tmp.path().join("ui.db").to_string_lossy().into_owned());
+        }
 
         let cli = chilled_proxy::cli::Cli::try_parse_from(argv).unwrap();
         let config = cli.resolve().expect("configuration resolves");
-        let app = chilled_proxy::build_app(&config);
+        let (app, _ui) = chilled_proxy::build_full_app(&config)
+            .await
+            .expect("app builds");
         let (base_url, client) = chilled_testkit::serve_app(app, "/healthz").await;
 
         TestApp {

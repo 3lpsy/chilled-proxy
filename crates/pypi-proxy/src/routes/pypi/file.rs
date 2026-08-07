@@ -10,16 +10,14 @@ use url::Url;
 
 use crate::constants::{FILE_CTYPE, METADATA_SUFFIX, TEXT_CTYPE};
 use crate::model::PypiEntry;
+use crate::routes::pypi::cache::{cache_read_simple, cache_write_simple};
 use crate::routes::pypi::fetch::{download_simple, is_json_simple};
-use crate::routes::pypi::serve::{cache_read_simple, cache_write_simple};
 use crate::state::AppState;
 use crate::{filter, valid};
 
 /// The index entry for `filename`, from the document the proxy itself fetched.
-///
 /// A PEP 658 `.metadata` sidecar has no entry of its own — it is described by,
-/// and ages with, its distribution — so the lookup is done under the
-/// distribution's name.
+/// and ages with, its distribution — so the lookup uses the distribution name.
 async fn lookup_file(state: &AppState, project: &str, filename: &str) -> Option<Value> {
     let mut data = cache_read_simple(&state.config.simple_dir, project).await;
 
@@ -60,15 +58,10 @@ fn entry_old_enough(entry: Option<&Value>, cutoff: u64) -> bool {
     matches!(secs, Some(secs) if secs <= cutoff)
 }
 
-/// The upstream URL to fetch `filename` from.
-///
-/// The index names each file's host itself, which is the only way a mount can
-/// serve an index whose files are spread across several (PyTorch keeps `torch`
-/// on its own CDN and its dependencies on PyPI's). That host is upstream-
-/// controlled, so it is honored only when the operator has allowed it; anything
-/// else falls back to substituting the pinned files URL, which is both the
-/// single-host case and what `--pypi-files-url` exists to do for an operator
-/// mirroring PyPI's file host somewhere else.
+/// The upstream URL to fetch `filename` from. The index names each file's
+/// host itself (how multi-host indexes like PyTorch's work), but that host is
+/// upstream-controlled, so it is honored only when the operator allowed it;
+/// anything else falls back to substituting the pinned files URL.
 fn upstream_file_url(
     state: &AppState,
     entry: Option<&Value>,
@@ -91,10 +84,8 @@ fn upstream_file_url(
             };
         }
         // Substituting is right for a mirrored file host and wrong for a
-        // genuinely multi-host index, and only the operator can tell them
-        // apart — so say which host was skipped and how to allow it. This is
-        // the misconfiguration signal for a PyTorch-style mount, so it must be
-        // visible at the default log level, not buried in debug.
+        // genuinely multi-host index; only the operator can tell them apart,
+        // so warn (not debug) with the skipped host and how to allow it.
         warn!(
             "download: {label}: index names host '{}', not allowed for this mount; \
              falling back to the pinned files URL (allow it with `file-hosts` if this 404s)",

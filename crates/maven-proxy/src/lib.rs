@@ -1,10 +1,8 @@
 //! Caching Maven repository proxy with metadata age-gating (cooldown).
 //!
-//! Serves a single wildcard route relative to its mount prefix (`/maven` in
-//! chilled-proxy), classified by path shape: artifact-level `maven-metadata.xml`
-//! (proxied, cached, age-gated, with checksums generated over the filtered
-//! bytes) and artifact downloads (proxied, cached verbatim). Artifact bytes are
-//! never modified — only metadata is filtered.
+//! One wildcard route classified by path shape: `maven-metadata.xml` (proxied,
+//! cached, age-gated, checksums generated over the filtered bytes) and
+//! artifact downloads (proxied, cached verbatim, never modified).
 
 pub(crate) mod checksum;
 pub(crate) mod constants;
@@ -12,6 +10,7 @@ pub(crate) mod coords;
 pub(crate) mod filter;
 pub(crate) mod model;
 pub(crate) mod probe;
+pub(crate) mod purge;
 pub(crate) mod routes;
 pub(crate) mod sidecar;
 pub(crate) mod state;
@@ -96,5 +95,13 @@ impl RegistryProxy for MavenProxy {
 
     fn cache_stats(&self) -> CacheStats {
         stats::cache_stats(&self.state.config.repo_dir)
+    }
+
+    fn purge_artifact(&self, name: &str, version: &str) -> Vec<String> {
+        purge::purge_artifact(&self.state.config.repo_dir, name, version)
+    }
+
+    fn purge_all(&self) {
+        purge::purge_all(&self.state.config.repo_dir);
     }
 }

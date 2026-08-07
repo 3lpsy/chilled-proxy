@@ -1,15 +1,14 @@
 //! Caching PyPI simple-index proxy with upload-time age-gating (cooldown).
 //!
-//! Serves two route families relative to its mount prefix (`/pypi` in
-//! chilled-proxy): `GET /simple/{project}/` (proxied, cached, age-gated
-//! PEP 691/503 project indexes with proxied file URLs) and
-//! `GET /files/{project}/{path}` (proxied, cached distribution downloads).
+//! Serves `GET /simple/{project}/` (proxied, cached, age-gated PEP 691/503
+//! indexes with proxied file URLs) and `GET /files/{project}/{path}`.
 
 pub(crate) mod accept;
 pub(crate) mod constants;
 pub(crate) mod filter;
 pub(crate) mod html;
 pub(crate) mod model;
+pub(crate) mod purge;
 pub(crate) mod render;
 pub(crate) mod routes;
 pub(crate) mod state;
@@ -62,14 +61,10 @@ pub struct Config {
     pub(crate) simple_dir: PathBuf,
     /// Distribution file cache directory (`<cache_dir>/files`).
     pub(crate) files_dir: PathBuf,
-    /// Hosts this mount may fetch distribution files from.
-    ///
-    /// An index names each file's host itself, and one index can spread its
-    /// files across several (PyTorch links `torch` at its own CDN, its
-    /// dependencies at PyPI's, and some wheels relatively). Resolving the host
-    /// from the document rather than from config is what makes those mounts
-    /// work — but it also means a hostile upstream could name *any* host, so
-    /// the resolved host must appear here or the download is refused.
+    /// Hosts this mount may fetch distribution files from. An index names each
+    /// file's host itself and may spread files across several (PyTorch), but a
+    /// hostile upstream could name *any* host — so the resolved host must
+    /// appear here or the download is refused.
     pub(crate) file_hosts: HashSet<String>,
 }
 
@@ -165,5 +160,13 @@ impl RegistryProxy for PypiProxy {
 
     fn cache_stats(&self) -> CacheStats {
         stats::cache_stats(&self.state.config.files_dir)
+    }
+
+    fn purge_artifact(&self, name: &str, version: &str) -> Vec<String> {
+        purge::purge_artifact(&self.state.config.files_dir, name, version)
+    }
+
+    fn purge_all(&self) {
+        purge::purge_all(&self.state.config.files_dir);
     }
 }

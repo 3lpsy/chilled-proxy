@@ -52,10 +52,8 @@ impl From<bool> for Gate {
 }
 
 /// Whether this version may be downloaded under `--restrict-downloads`.
-///
-/// **Fail-closed**: the sidecar age (probed on demand — Maven fetches pinned
-/// artifacts without reading metadata first) must exist and be `<= cutoff`,
-/// with the one exception that upstream reporting the version absent is a
+/// **Fail-closed**: the sidecar age (probed on demand) must exist and be
+/// `<= cutoff` — except that upstream reporting the version absent is a
 /// definite answer and becomes a 404 rather than a refusal.
 async fn artifact_old_enough(
     state: &AppState,

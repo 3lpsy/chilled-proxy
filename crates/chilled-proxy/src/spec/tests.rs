@@ -1,4 +1,9 @@
+use std::time::Duration;
+
+use url::Url;
+
 use super::*;
+use crate::kind::RegistryKind;
 
 #[test]
 fn name_is_the_only_required_key() {

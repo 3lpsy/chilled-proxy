@@ -1,2 +1,12 @@
 /target
+CLAUDE.md
+claude
+AGENTS.md
+.env
+/docs/internal
 /docs
+/dist
+# sqlite files from local --ui-db-path runs
+*.db
+*.db-wal
+*.db-shm

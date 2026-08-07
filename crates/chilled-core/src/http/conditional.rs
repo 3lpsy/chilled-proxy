@@ -18,11 +18,8 @@ pub struct ConditionalResponse {
 
 /// Performs a conditional `GET` for a metadata document, driving `entry`'s
 /// validators: sends `If-None-Match` (else `If-Modified-Since`) from the entry
-/// and harvests the response `ETag` / `Last-Modified` back into it.
-///
-/// Identity encoding is pinned unconditionally: a compressed body would fail
-/// downstream parsing/filtering and could pass through unfiltered, silently
-/// disabling age-gating.
+/// and harvests the response `ETag` / `Last-Modified` back into it. Identity
+/// encoding is pinned so a compressed body cannot bypass downstream filtering.
 pub async fn conditional_get(
     client: &reqwest::Client,
     url: Url,

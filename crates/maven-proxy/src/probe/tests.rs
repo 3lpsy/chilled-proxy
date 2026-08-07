@@ -1,7 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::*;
+use super::pom::{needs_retry, stamp_from_last_modified};
+use super::{probe_version, Probed};
 use crate::coords::MavenCoords;
+use crate::sidecar::{Stamp, VersionTimes, FIRST_SEEN_SRC, LAST_MODIFIED_SRC};
+use url::Url;
 
 fn now_secs() -> u64 {
     SystemTime::now()

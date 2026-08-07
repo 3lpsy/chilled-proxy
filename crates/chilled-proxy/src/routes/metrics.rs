@@ -25,7 +25,7 @@ pub(crate) async fn handle_metrics(State(state): State<TopState>) -> Response {
 }
 
 /// Builds the metrics JSON document from per-mount cache stats.
-fn metrics_json<S: AsRef<str>>(stats: &[(S, CacheStats)]) -> String {
+pub(super) fn metrics_json<S: AsRef<str>>(stats: &[(S, CacheStats)]) -> String {
     let registries: Vec<String> = stats
         .iter()
         .map(|(name, s)| {
@@ -34,10 +34,11 @@ fn metrics_json<S: AsRef<str>>(stats: &[(S, CacheStats)]) -> String {
                 .iter()
                 .map(|a| {
                     format!(
-                        r#"{{"name":"{}","version":"{}","cached_at":{}}}"#,
+                        r#"{{"name":"{}","version":"{}","cached_at":{},"size_bytes":{}}}"#,
                         json_escape(&a.name),
                         json_escape(&a.version),
-                        a.cached_at
+                        a.cached_at,
+                        a.size_bytes
                     )
                 })
                 .collect();
@@ -54,55 +55,4 @@ fn metrics_json<S: AsRef<str>>(stats: &[(S, CacheStats)]) -> String {
         r#"{{"service":"chilled-proxy","registries":{{{}}}}}"#,
         registries.join(",")
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chilled_core::registry::CachedArtifact;
-
-    #[test]
-    fn metrics_json_shape() {
-        let stats = vec![
-            (
-                "crates",
-                CacheStats {
-                    artifacts: vec![CachedArtifact {
-                        name: "serde".into(),
-                        version: "1.0.0".into(),
-                        cached_at: 42,
-                    }],
-                },
-            ),
-            ("npm", CacheStats::default()),
-        ];
-        let json: serde_json::Value = serde_json::from_str(&metrics_json(&stats)).unwrap();
-        assert_eq!(json["service"], "chilled-proxy");
-        assert_eq!(json["registries"]["crates"]["cached_count"], 1);
-        assert_eq!(
-            json["registries"]["crates"]["artifacts"][0]["name"],
-            "serde"
-        );
-        assert_eq!(json["registries"]["npm"]["cached_count"], 0);
-    }
-
-    #[test]
-    fn metrics_json_escapes_names() {
-        // npm names can contain `@`/`/`; anything unexpected must stay valid JSON.
-        let stats = vec![(
-            "npm",
-            CacheStats {
-                artifacts: vec![CachedArtifact {
-                    name: "@scope/pkg\"x".into(),
-                    version: "1.0.0".into(),
-                    cached_at: 1,
-                }],
-            },
-        )];
-        let parsed: serde_json::Value = serde_json::from_str(&metrics_json(&stats)).unwrap();
-        assert_eq!(
-            parsed["registries"]["npm"]["artifacts"][0]["name"],
-            "@scope/pkg\"x"
-        );
-    }
 }

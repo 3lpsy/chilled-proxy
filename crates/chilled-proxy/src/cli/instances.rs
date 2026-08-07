@@ -55,6 +55,8 @@ pub struct ResolvedConfig {
     pub log_level: String,
     /// Where to listen.
     pub listen: ListenAddress,
+    /// Web UI + management API configuration; `None` when `--ui` is off.
+    pub ui: Option<chilled_api::UiConfig>,
 }
 
 impl Cli {
@@ -94,6 +96,7 @@ impl Cli {
             enable_metrics: self.enable_metrics,
             log_level: self.resolved_log_level(),
             listen: self.listen_address(),
+            ui: super::ui::resolve_ui(self)?,
         })
     }
 

@@ -5,9 +5,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::http::{fmt_http_date, parse_http_date};
 
-/// HTTP validators and freshness for one cached upstream response.
-///
-/// Registries embed this in (or alias it as) their metadata cache entry type.
+/// HTTP validators and freshness for one cached upstream response. Registries
+/// embed this in (or alias it as) their metadata cache entry type.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CacheEntry {
     /// Upstream HTTP entity tag.
@@ -84,68 +83,5 @@ impl CacheEntry {
     /// Records that upstream was consulted just now.
     pub fn set_last_updated(&mut self) {
         self.atime = Some(Instant::now());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::UNIX_EPOCH;
-
-    #[test]
-    fn equivalence_prefers_etag_then_last_modified() {
-        let mut a = CacheEntry::new();
-        let mut b = CacheEntry::new();
-        assert!(!a.is_equivalent(&b));
-
-        a.set_etag("\"e1\"");
-        b.set_etag("\"e1\"");
-        assert!(a.is_equivalent(&b));
-        b.set_etag("\"e2\"");
-        assert!(!a.is_equivalent(&b));
-
-        let mut c = CacheEntry::new();
-        let mut d = CacheEntry::new();
-        c.set_last_modified("Sun, 06 Nov 1994 08:49:37 GMT");
-        d.set_last_modified("Sun, 06 Nov 1994 08:49:37 GMT");
-        assert!(c.is_equivalent(&d));
-        assert!(!c.is_equivalent(&CacheEntry::new()));
-    }
-
-    #[test]
-    fn last_modified_round_trips() {
-        let mut e = CacheEntry::new();
-        e.set_last_modified("Sun, 06 Nov 1994 08:49:37 GMT");
-        assert_eq!(
-            e.last_modified().as_deref(),
-            Some("Sun, 06 Nov 1994 08:49:37 GMT")
-        );
-
-        let mut m = CacheEntry::new();
-        m.set_mtime(UNIX_EPOCH);
-        assert_eq!(
-            m.last_modified().as_deref(),
-            Some("Thu, 01 Jan 1970 00:00:00 GMT")
-        );
-    }
-
-    #[test]
-    fn validator_prefers_etag_over_last_modified() {
-        let mut e = CacheEntry::new();
-        assert_eq!(e.validator(), "");
-        e.set_last_modified("Sat, 01 Jan 2000 00:00:00 GMT");
-        assert_eq!(e.validator(), "Sat, 01 Jan 2000 00:00:00 GMT");
-        e.set_etag("\"x\"");
-        assert_eq!(e.validator(), "\"x\"");
-    }
-
-    #[test]
-    fn expiry_requires_a_recorded_update() {
-        let mut e = CacheEntry::new();
-        assert!(!e.is_expired_with_ttl(&Duration::ZERO));
-        e.set_last_updated();
-        assert!(!e.is_expired_with_ttl(&Duration::from_secs(3600)));
-        std::thread::sleep(Duration::from_millis(2));
-        assert!(e.is_expired_with_ttl(&Duration::ZERO));
     }
 }

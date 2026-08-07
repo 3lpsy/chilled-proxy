@@ -2,7 +2,7 @@ use super::{is_artifact_file, is_dir_segment, is_file_segment, is_version};
 
 #[test]
 fn dir_segments_accept_normal_names() {
-    for seg in ["org", "commons-lang3", "1.0.0", "_internal", "3lpsy", "a"] {
+    for seg in ["org", "commons-lang3", "1.0.0", "_internal", "guava", "a"] {
         assert!(is_dir_segment(seg), "segment: {seg}");
     }
 }

@@ -1,8 +1,7 @@
 //! npm name, scope, and version validation.
 //!
-//! Path segments are attacker-controlled and fed into `Url::join` and cache
-//! paths; restricting them to the npm charset closes SSRF (`http:` scheme
-//! segments) and traversal (`..`, `/`).
+//! Attacker-controlled path segments feed `Url::join` and cache paths;
+//! restricting them to the npm charset closes SSRF and traversal.
 
 /// Maximum accepted package name length (npm caps full names at 214).
 pub(crate) const MAX_NAME_LEN: usize = 214;

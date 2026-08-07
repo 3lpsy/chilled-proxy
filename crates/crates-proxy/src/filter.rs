@@ -1,9 +1,7 @@
 //! Sparse-index age-gating filter (crates.io NDJSON).
 //!
-//! Drops version lines whose `pubtime` is newer than a cutoff. Each line is
-//! compact JSON, so `pubtime` is extracted with a targeted byte scan instead of
-//! a full parse — no allocation for large `deps` arrays. Ported from
-//! menhera.org's crates.io cooldown proxy.
+//! Drops version lines whose `pubtime` is newer than a cutoff; `pubtime` is
+//! read with a targeted byte scan, so large `deps` arrays are never parsed.
 
 use chilled_core::time::parse_rfc3339z;
 

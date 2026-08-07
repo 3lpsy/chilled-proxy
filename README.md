@@ -448,6 +448,65 @@ seconds). It is **only routed when enabled** with `--enable-metrics` (or
 
 ---
 
+## Web UI
+
+An embedded, mobile-friendly web UI (Dioxus SPA compiled to wasm, baked into the binary) plus a
+JSON management API. Both are off by default and share one switch:
+
+```sh
+chilled-proxy --ui \
+  --ui-admin-username admin --ui-admin-password 'change-me-please'
+# UI at http://host:3080/ui/ — API under /api
+```
+
+What it shows: one page per mount (its redacted configuration on top — upstream URLs, cooldown,
+TTL, auth *presence* with header names but never values — and a paginated, searchable, sortable
+table of cached artifacts: name, version, size on disk, cache time), a view-only server
+configuration page, user management, and a live server-log viewer (follow mode, level filter,
+search). Cache state is snapshotted into sqlite every `--ui-cache-update-interval` (default 10m,
+also on demand from the UI).
+
+Authentication has two modes (`--ui-auth`, default `builtin`):
+
+- **builtin** — username/password accounts in sqlite (argon2id), session cookies. Bootstrap the
+  first account with `CHILLED_UI_ADMIN_USERNAME`/`CHILLED_UI_ADMIN_PASSWORD`, or set
+  `--ui-trust-first-user-signup` and the first visitor is walked through creating it (only while
+  zero users exist).
+- **oidc** — for deployments behind oauth2-proxy (or any auth proxy): the server trusts one
+  forwarded identity header (`--ui-oidc-user-header`, e.g. `x-auth-request-email`) and creates
+  users on first sight. The proxy in front MUST strip that header from client requests.
+  `--ui-oidc-login-url` points the navbar Login button at e.g. `/oauth2/sign_in`. Incompatible
+  with the builtin-only knobs (signup, admin bootstrap) — rejected at startup.
+
+Login is never forced: with `--ui-public-readonly-enabled`, anonymous visitors can read the
+state APIs (registries, artifacts, config) and the UI just offers Login in the navbar. User
+management and logs stay authenticated even then.
+
+| Flag | Env | Default |
+| --- | --- | --- |
+| `--ui` | `CHILLED_UI` | off |
+| `--ui-auth` | `CHILLED_UI_AUTH` | `builtin` (`builtin`\|`oidc`) |
+| `--ui-oidc-user-header` | `CHILLED_UI_OIDC_USER_HEADER` | — (required for oidc) |
+| `--ui-oidc-login-url` | `CHILLED_UI_OIDC_LOGIN_URL` | — |
+| `--ui-public-readonly-enabled` | `CHILLED_UI_PUBLIC_READONLY_ENABLED` | off |
+| `--ui-cache-update-interval` | `CHILLED_UI_CACHE_UPDATE_INTERVAL` | `10m` (min 30s) |
+| `--ui-trust-first-user-signup` | `CHILLED_UI_TRUST_FIRST_USER_SIGNUP` | off |
+| `--ui-admin-username` / `--ui-admin-password` | `CHILLED_UI_ADMIN_USERNAME` / `_PASSWORD` | — |
+| `--ui-db-path` | `CHILLED_UI_DB_PATH` | `/var/lib/chilled/chilled.db` |
+| `--ui-session-ttl` | `CHILLED_UI_SESSION_TTL` | `7d` |
+| `--ui-dev-dist-dir` | `CHILLED_UI_DEV_DIST_DIR` | — (dev: serve the UI from disk) |
+
+The sqlite file lives *outside* the cache dir on purpose — wiping the cache never deletes users.
+In Docker, persist `/var/lib/chilled` next to `/var/cache/chilled`.
+
+Building the frontend needs `rustup target add wasm32-unknown-unknown` and the matching
+`wasm-bindgen-cli` once; then `just ui-build` produces `dist/` (embedded on the next server
+build) and `just ui-dev` runs the server serving `dist/` from disk for iteration. A binary built
+without `dist/` still works — `/ui` answers 503 with a hint. The Docker image builds and embeds
+the UI automatically.
+
+---
+
 ## How it works
 
 Each registry proxy shares the same skeleton (inherited from `crates-io-proxy`):

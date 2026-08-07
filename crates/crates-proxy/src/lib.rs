@@ -1,15 +1,14 @@
 //! Caching crates.io proxy with sparse-index age-gating (cooldown).
 //!
-//! Serves two routes relative to its mount prefix (`/crates` in chilled-proxy):
-//! `GET /index/{*path}` (proxied, cached, age-gated sparse index) and
-//! `GET /api/v1/crates/{*path}` (proxied, cached crate downloads). Crate bytes
-//! are never modified — only index metadata is filtered.
+//! Serves `GET /index/{*path}` (proxied, cached, age-gated sparse index) and
+//! `GET /api/v1/crates/{*path}` (crate downloads, served unmodified).
 
 pub(crate) mod cache;
 pub(crate) mod config;
 pub(crate) mod constants;
 pub(crate) mod filter;
 pub(crate) mod http;
+pub(crate) mod purge;
 pub(crate) mod routes;
 pub(crate) mod state;
 pub(crate) mod stats;
@@ -55,5 +54,13 @@ impl RegistryProxy for CratesProxy {
 
     fn cache_stats(&self) -> CacheStats {
         stats::cache_stats(&self.state.config.crates_dir)
+    }
+
+    fn purge_artifact(&self, name: &str, version: &str) -> Vec<String> {
+        purge::purge_artifact(&self.state.config.crates_dir, name, version)
+    }
+
+    fn purge_all(&self) {
+        purge::purge_all(&self.state.config.crates_dir);
     }
 }

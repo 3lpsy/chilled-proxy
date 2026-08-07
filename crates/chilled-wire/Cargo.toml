@@ -1,0 +1,19 @@
+[package]
+name = "chilled-wire"
+description = "Wire types shared by the chilled-proxy management API and web UI"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[lib]
+name = "chilled_wire"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

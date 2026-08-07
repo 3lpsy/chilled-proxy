@@ -1,9 +1,9 @@
-//! Cache primitives shared by every registry proxy.
-//!
-//! - [`entry`] — cached response metadata (HTTP validators and freshness).
-//! - [`fs`] — on-disk file store/fetch with optional mtime control.
-//! - [`metadata`] — bounded in-memory metadata cache (etag / mtime entries).
-//! - [`memo`] — bounded in-memory memo of filtered response bodies.
+//! Cache primitives shared by every registry proxy: response metadata entries
+//! ([`entry`]), on-disk file store/fetch ([`fs`]), and bounded in-memory
+//! metadata and filtered-body caches ([`metadata`], [`memo`]).
+
+#[cfg(test)]
+mod tests;
 
 pub mod entry;
 pub mod fs;

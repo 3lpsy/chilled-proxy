@@ -28,11 +28,9 @@ impl Format {
 }
 
 /// Picks the response format from a client `Accept` header. Containment check
-/// (q-values ignored): JSON when the header mentions a JSON simple type or
+/// (q-values ignored, media types case-insensitive): JSON when the header
+/// mentions a JSON simple type (including the `.latest+json` alias) or
 /// `application/json`, HTML otherwise (old pip sends `text/html` or nothing).
-///
-/// Media types are case-insensitive, and clients may ask for the version-
-/// agnostic `...simple.latest+json` alias.
 pub(crate) fn negotiate(accept: Option<&str>) -> Format {
     let Some(header) = accept else {
         return Format::Html;

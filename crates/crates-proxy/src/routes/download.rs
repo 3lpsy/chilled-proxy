@@ -29,11 +29,9 @@ async fn cache_read_crate(dir: &Path, info: &CrateInfo) -> Option<Vec<u8>> {
         .flatten()
 }
 
-/// Whether this version may be downloaded under `--restrict-downloads`.
-///
-/// The version's `pubtime` is read from the locally cached *pristine* index
-/// entry. **Fail-closed**: no cached index, unknown version, or a too-new
-/// `pubtime` all refuse the download.
+/// Whether this version may be downloaded under `--restrict-downloads`, per
+/// the locally cached *pristine* index entry's `pubtime`. **Fail-closed**: no
+/// cached index, unknown version, or a too-new `pubtime` all refuse.
 pub(crate) async fn download_old_enough(state: &AppState, info: &CrateInfo, cutoff: u64) -> bool {
     let dir = state.config.index_dir.clone();
     let entry = IndexEntry::new(info.name());
