@@ -632,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-api"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "argon2",
  "axum",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-core"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-proxy"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "chilled-api",
@@ -696,7 +696,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-testkit"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "chilled-core",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-ui"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "chilled-wire",
  "dioxus",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "chilled-wire"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -829,6 +829,12 @@ dependencies = [
  "bytes",
  "memchr",
 ]
+
+[[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "const-random"
@@ -1011,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "crates-proxy"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -1243,6 +1249,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.1",
+ "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
 ]
@@ -2925,7 +2932,7 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "maven-proxy"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -2936,7 +2943,7 @@ dependencies = [
  "quick-xml",
  "reqwest",
  "serde_json",
- "sha1 0.10.7",
+ "sha1 0.11.0",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
@@ -3086,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "npm-proxy"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
@@ -3424,7 +3431,7 @@ dependencies = [
 
 [[package]]
 name = "pypi-proxy"
-version = "0.1.6"
+version = "1.0.0"
 dependencies = [
  "axum",
  "bytes",
