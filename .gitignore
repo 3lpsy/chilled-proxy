@@ -4,6 +4,7 @@ claude
 AGENTS.md
 .env
 /docs/internal
+/data/internal
 /docs
 /dist
 # sqlite files from local --ui-db-path runs
