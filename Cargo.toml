@@ -22,7 +22,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.1"
 authors = ["3lpsy"]
 edition = "2021"
 homepage = "https://github.com/3lpsy/chilled-proxy"

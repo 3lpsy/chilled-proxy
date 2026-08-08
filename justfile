@@ -34,8 +34,11 @@ _version-bump part:
 	  inpkg && /^version[[:space:]]*=/ && !done { sub(/"[^"]*"/, "\"" new "\""); done = 1 }
 	  { print }
 	' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
-	echo "[workspace.package] version: ${cur} -> ${new}"
-	echo "Next: cargo build (refresh Cargo.lock), commit, then 'just ci-tagged-release'."
+	# Sync Cargo.lock in place (workspace members only, no network) — a stale
+	# lock fails CI's --locked builds.
+	cargo update --workspace --offline
+	echo "[workspace.package] version: ${cur} -> ${new} (Cargo.lock synced)"
+	echo "Next: commit, then 'just ci-tagged-release'."
 
 # Fails fast when the installed wasm-bindgen CLI mismatches Cargo.lock.
 _ui-check-wbg:

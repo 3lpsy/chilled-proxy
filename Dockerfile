@@ -69,7 +69,7 @@ RUN cargo build --release --locked -p chilled-proxy
 ### Second stage: Copy the built application into the runtime image.
 FROM alpine:latest AS runner
 
-LABEL version="0.1.0"
+LABEL version="1.0.1"
 LABEL description="chilled-proxy: multi-registry caching proxy with cooldown age-gating"
 LABEL maintainer="3lpsy"
 
